@@ -101,28 +101,28 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
 
         #Calculamos el stock total, que es el stock físico más el stock en tránsito.
         projectedStock = onHandLevel + sum(inTransitStock.values())
-        
+
+        MeanDemand = (currentDemand + sum(currentForecast))/(FORECAST_LENGHT+1) #calculamos la demanda media para poder obtener el tamaño del lote y el punto de pedido ya que no es constante, no sé si hay que calcular la media para todo el forecasr lenght o solo hasta el lead time.
+        OrderPoint = leadTime*MeanDemand 
+
         #decidimos la cantidad a pedir y calculamos los costes si hay stockout
         if onHandLevel < currentDemand: # if the stock is less than the demand, we stockout
             totalStockoutCost += stockoutPenalty * (currentDemand - onHandLevel) #coste de stockout * la cantidad que falta para cubrir la demanda
-            orderQuantity = max(0,currentDemand - projectedStock) #la cantidad a pedir será el máximo entre 0 y la demanda menos el stock total proyectado (aunque no tengamos stock físico si con el stock en tránsito podemos cubrir la demanda no sería necesario volver a pedir)
+        if projectedStock<=OrderPoint:
+            orderQuantity = np.sqrt(2*orderingCost*MeanDemand/holdingCost)            
             noOrders += 1
             inTransitStock[t+leadTime]= orderQuantity  # save the order in transit que llegará en el período t+leadTime que es lo que tarda en llegar
         else:
-            if projectedStock < sum(currentForecast): # if the stock is less than the forecast, we order
-                orderQuantity = sum(currentForecast) - projectedStock # la cantidad pedida sería la demanda prevista menos el stock que tenemos mas el que está por llegar
-                noOrders += 1
-                inTransitStock[t+leadTime]= orderQuantity  # save the order in transit que llegará en el período t+leadTime que es lo que tarda en llegar
-            else:
-                orderQuantity = 0  # no order
-        
+            orderQuantity = 0  # no order
+
+
         #Actualizamos el stock físico
         onHandLevel = onHandLevel - currentDemand 
 
         #Calculamos los costes totales
         totalOrderingCost += orderingCost * orderQuantity
         totalHoldingCost += holdingCost * onHandLevel
-        totalIncome += unitRevenue * min(currentDemand, onHandLevel)
+        totalIncome += unitRevenue * min(currentDemand, onHandLevel) # el ingreso es el beneficio por la cantidad vendida, que es la demanda actual o el stock físico, lo que sea menor
         reward = (totalIncome - totalHoldingCost - totalStockoutCost - totalOrderingCost)/noOrders
 
         #Añadimos la trayectoria
