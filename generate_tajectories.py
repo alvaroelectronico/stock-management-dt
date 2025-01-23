@@ -10,6 +10,15 @@ MAX_LEAD_TIME = 20
 MIN_HOLDING_COST = 1
 MAX_HOLDING_COST = 10
 
+MIN_ORDERING_COST = 1 # TODO: Change this to a consisten value
+MAX_ORDERING_COST = 10 # TODO: Change this to a consisten value
+
+MIN_STOCKOUT_PENALTY = 1 # TODO: Change this to a consisten value
+MAX_STOCKOUT_PENALTY = 10 # TODO: Change this to a consisten value
+
+MIN_UNIT_REVENUE = 1 # TODO: Change this to a consisten value
+MAX_UNIT_REVENUE = 10 # TODO: Change this to a consisten value
+
 MIN_DEMAND_MEAN = 10
 MAX_DEMAND_MEAN = 20
 
@@ -26,10 +35,18 @@ def generateInstanceData():
     leadTime = np.random.randint(MIN_LEAD_TIME, MAX_LEAD_TIME)
     holdingCost = np.random.randint(MIN_HOLDING_COST, MAX_HOLDING_COST)
     onHandLevel = 0 # TODO: Change this to a consisten value
+    orderingCost = np.random.randint(MIN_ORDERING_COST, MAX_ORDERING_COST)  
+    stockoutPenalty = np.random.randint(MIN_STOCKOUT_PENALTY, MAX_STOCKOUT_PENALTY)  
+    unitRevenue = np.random.randint(MIN_UNIT_REVENUE, MAX_UNIT_REVENUE)  
+        
 
     inputData = {'leadtime': leadTime, 
                  'holdingCost': holdingCost, 
-                 'onHandLevel': onHandLevel}
+                 'onHandLevel': onHandLevel,
+                 'orderingCost': orderingCost, 
+                 'stockoutPenalty': stockoutPenalty, 
+                 'unitRevenue': unitRevenue, 
+                 'inTransitStock': 0 } # stock en tránsito inicialmente 0
     
     return inputData
 
@@ -38,23 +55,63 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
     leadTime = inputData['leadtime']    
     holdingCost = inputData['holdingCost']
     onHandLevel = inputData['onHandLevel']
-    
+    inTransitStock = inputData['inTransitStock'] 
+    orderingCost = inputData['orderingCost'] 
+    stockoutPenalty = inputData['stockoutPenalty'] 
+    unitRevenue = inputData['unitRevenue'] 
 
     # Defining system variables
     totalHoldingCost = 0
     totalOrderingCost = 0
     totalStockoutCost = 0
     totalIncome = 0
-    
-    trajectory = np.zeros(trajectoryLength)
-    
-    for i in range(trajectoryLength):
-        currentDemand = np.random.normal(MIN_DEMAND_MEAN, MAX_DEMAND_MEAN)
+    orderQuantity = 0
+    noOrders = 0
+    meanRewards = 0
 
-        currentForecast = 0
+    rewards = np.zeros(trajectoryLength)  # Rewards for each period
+    trajectory = np.zeros(trajectoryLength) 
+
+    demand_mean = np.random.randint(MIN_DEMAND_MEAN, MAX_DEMAND_MEAN)
+    demand_std = np.random.randint(MIN_DEMAND_STD, MAX_DEMAND_STD)
     
+    for t in range(trajectoryLength):
+
+        currentDemand = np.random.normal(demand_mean, demand_std)
+        currentForecast = np.random.normal(demand_mean, demand_std, size=FORECAST_LENGHT)
+
+        if t >= leadTime:
+            onHandLevel = onHandLevel + trajectory[t-leadTime] 
+
+        inTransitStock = sum(trajectory[max(0, t-leadTime+1):t])
+        projected_stock = onHandLevel + inTransitStock
+        
+        if onHandLevel < currentDemand: # if the stock is less than the demand, we stockout
+            totalStockoutCost += stockoutPenalty * (currentDemand - onHandLevel)
+            orderQuantity = max(0,currentDemand - projected_stock)
+            trajectory[t] = orderQuantity  # save the order quantity
+            noOrders += 1
+            inTransitStock += orderQuantity  # save the order in transit
+        else:
+            if projected_stock < sum(currentForecast): # if the stock is less than the forecast, we order
+                orderQuantity = sum(currentForecast) - projected_stock
+                trajectory[t] = orderQuantity  # save the order quantity
+                noOrders += 1
+                inTransitStock += orderQuantity  # save the order in transit
+            else:
+                trajectory[t] = 0  # no order
+        
+        onHandLevel = max(0, onHandLevel - currentDemand)
+
+        totalOrderingCost += orderingCost * orderQuantity
+        totalHoldingCost += holdingCost * onHandLevel
+        totalIncome += unitRevenue * min(currentDemand, onHandLevel)
+        rewards[t] = totalIncome - totalHoldingCost - totalStockoutCost - totalOrderingCost
+
+    meanRewards = sum(rewards)/noOrders
 
     return trajectory
+
 
 
 def addTrajectoryToTrainingData(trajectory, trainingData):
