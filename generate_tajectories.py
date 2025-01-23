@@ -46,7 +46,7 @@ def generateInstanceData():
                  'orderingCost': orderingCost, 
                  'stockoutPenalty': stockoutPenalty, 
                  'unitRevenue': unitRevenue, 
-                 'inTransitStock': 0 } # stock en tránsito inicialmente 0
+                 'inTransitStock': 0 } # stock en tránsito inicialmente 0 # En realidad, esto debe ser un diccionario, con las llegadas pendientes de recepción, donde las keys son los días y los value son las cantidades que llegarán.
     
     return inputData
 
@@ -69,9 +69,10 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
     noOrders = 0
     meanRewards = 0
 
-    rewards = np.zeros(trajectoryLength)  # Rewards for each period
-    trajectory = np.zeros(trajectoryLength) 
+    rewards = np.zeros(trajectoryLength)  # Rewards for each period # En realidad, esto tiene que guardar el benficio medio para el conjunto de la trayectoria.
+    trajectory = np.zeros(trajectoryLength) # Esto hay que revisarlo, porque lo que necesitamos es almacenar para cada paso de la trayectoria: estado, acción, return-to-go
 
+    # Por sencillo que pueda ser, comenta cada bloquecito de código (quizá no haga falta siempre cada línea, pero sí cada bloque, en lo que sigue de código hace falta comentar más
     demand_mean = np.random.randint(MIN_DEMAND_MEAN, MAX_DEMAND_MEAN)
     demand_std = np.random.randint(MIN_DEMAND_STD, MAX_DEMAND_STD)
     
@@ -81,7 +82,7 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
         currentForecast = np.random.normal(demand_mean, demand_std, size=FORECAST_LENGHT)
 
         if t >= leadTime:
-            onHandLevel = onHandLevel + trajectory[t-leadTime] 
+            onHandLevel = onHandLevel + trajectory[t-leadTime] # Esto no lo entiendo, no sé a qué responde. En algunas de las siguientes filas me pasa algo parecido, porfa comento y reviso.
 
         inTransitStock = sum(trajectory[max(0, t-leadTime+1):t])
         projected_stock = onHandLevel + inTransitStock
