@@ -46,7 +46,7 @@ def generateInstanceData():
                  'orderingCost': orderingCost, 
                  'stockoutPenalty': stockoutPenalty, 
                  'unitRevenue': unitRevenue, 
-                 'inTransitStock': 0 } # stock en tránsito inicialmente 0 # En realidad, esto debe ser un diccionario, con las llegadas pendientes de recepción, donde las keys son los días y los value son las cantidades que llegarán.
+                 'inTransitStock': {} } # stock en tránsito inicialmente 0 # En realidad, esto debe ser un diccionario, con las llegadas pendientes de recepción, donde las keys son los días y los value son las cantidades que llegarán.
     
     return inputData
 
@@ -67,49 +67,70 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
     totalIncome = 0
     orderQuantity = 0
     noOrders = 0
-    meanRewards = 0
 
-    rewards = np.zeros(trajectoryLength)  # Rewards for each period # En realidad, esto tiene que guardar el benficio medio para el conjunto de la trayectoria.
-    trajectory = np.zeros(trajectoryLength) # Esto hay que revisarlo, porque lo que necesitamos es almacenar para cada paso de la trayectoria: estado, acción, return-to-go
+    reward = 0   # En realidad, esto tiene que guardar el benficio medio para el conjunto de la trayectoria.
+    trajectory = [] # Esto hay que revisarlo, porque lo que necesitamos es almacenar para cada paso de la trayectoria: estado, acción, return-to-go
 
     # Por sencillo que pueda ser, comenta cada bloquecito de código (quizá no haga falta siempre cada línea, pero sí cada bloque, en lo que sigue de código hace falta comentar más
     demand_mean = np.random.randint(MIN_DEMAND_MEAN, MAX_DEMAND_MEAN)
     demand_std = np.random.randint(MIN_DEMAND_STD, MAX_DEMAND_STD)
     
     for t in range(trajectoryLength):
-
+        #Generamos la demanda actual y la demanda prevista
         currentDemand = np.random.normal(demand_mean, demand_std)
         currentForecast = np.random.normal(demand_mean, demand_std, size=FORECAST_LENGHT)
 
-        if t >= leadTime:
-            onHandLevel = onHandLevel + trajectory[t-leadTime] # Esto no lo entiendo, no sé a qué responde. En algunas de las siguientes filas me pasa algo parecido, porfa comento y reviso.
-
-        inTransitStock = sum(trajectory[max(0, t-leadTime+1):t])
-        projected_stock = onHandLevel + inTransitStock
+        if t in inTransitStock:
+            #Si t es un día de llegada de un pedido en tránsito, entonces se actualiza el nivel de stock en mano con la cantidad que se ha recibido en el período t.
+            onHandLevel = onHandLevel + inTransitStock[t] # Esto no lo entiendo, no sé a qué responde. En algunas de las siguientes filas me pasa algo parecido, porfa comento y reviso.
+            del inTransitStock[t] #eliminamos la cantidad que se ha recibido del stock en tránsito
         
+        #Definimos el estado del sistema actual
+        state = {
+            'onHandLevel': onHandLevel,
+            'inTransitStock': dict(inTransitStock),
+            'forecast': currentForecast.tolist(),
+            'demand': currentDemand,
+            'orderingCost': orderingCost,
+            'holdingCost': holdingCost,
+            'stockoutPenalty': stockoutPenalty,
+            'unitRevenue': unitRevenue,
+            'leadTime': leadTime,
+            'time_step': t  # Añadimos el paso de tiempo actual
+        }
+
+        #Calculamos el stock total, que es el stock físico más el stock en tránsito.
+        projectedStock = onHandLevel + sum(inTransitStock.values())
+        
+        #decidimos la cantidad a pedir y calculamos los costes si hay stockout
         if onHandLevel < currentDemand: # if the stock is less than the demand, we stockout
-            totalStockoutCost += stockoutPenalty * (currentDemand - onHandLevel)
-            orderQuantity = max(0,currentDemand - projected_stock)
-            trajectory[t] = orderQuantity  # save the order quantity
+            totalStockoutCost += stockoutPenalty * (currentDemand - onHandLevel) #coste de stockout * la cantidad que falta para cubrir la demanda
+            orderQuantity = max(0,currentDemand - projectedStock) #la cantidad a pedir será el máximo entre 0 y la demanda menos el stock total proyectado (aunque no tengamos stock físico si con el stock en tránsito podemos cubrir la demanda no sería necesario volver a pedir)
             noOrders += 1
-            inTransitStock += orderQuantity  # save the order in transit
+            inTransitStock[t+leadTime]= orderQuantity  # save the order in transit que llegará en el período t+leadTime que es lo que tarda en llegar
         else:
-            if projected_stock < sum(currentForecast): # if the stock is less than the forecast, we order
-                orderQuantity = sum(currentForecast) - projected_stock
-                trajectory[t] = orderQuantity  # save the order quantity
+            if projectedStock < sum(currentForecast): # if the stock is less than the forecast, we order
+                orderQuantity = sum(currentForecast) - projectedStock # la cantidad pedida sería la demanda prevista menos el stock que tenemos mas el que está por llegar
                 noOrders += 1
-                inTransitStock += orderQuantity  # save the order in transit
+                inTransitStock[t+leadTime]= orderQuantity  # save the order in transit que llegará en el período t+leadTime que es lo que tarda en llegar
             else:
-                trajectory[t] = 0  # no order
+                orderQuantity = 0  # no order
         
-        onHandLevel = max(0, onHandLevel - currentDemand)
+        #Actualizamos el stock físico
+        onHandLevel = onHandLevel - currentDemand 
 
+        #Calculamos los costes totales
         totalOrderingCost += orderingCost * orderQuantity
         totalHoldingCost += holdingCost * onHandLevel
         totalIncome += unitRevenue * min(currentDemand, onHandLevel)
-        rewards[t] = totalIncome - totalHoldingCost - totalStockoutCost - totalOrderingCost
+        reward = (totalIncome - totalHoldingCost - totalStockoutCost - totalOrderingCost)/noOrders
 
-    meanRewards = sum(rewards)/noOrders
+        #Añadimos la trayectoria
+        trajectory.append({
+            'state':state, 
+            'action':orderQuantity, 
+            'returnToGo':reward})
+
 
     return trajectory
 
