@@ -102,14 +102,17 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
         #Calculamos el stock total, que es el stock físico más el stock en tránsito.
         projectedStock = onHandLevel + sum(inTransitStock.values())
 
-        MeanDemand = (currentDemand + sum(currentForecast))/(FORECAST_LENGHT+1) #calculamos la demanda media para poder obtener el tamaño del lote y el punto de pedido ya que no es constante, no sé si hay que calcular la media para todo el forecasr lenght o solo hasta el lead time.
-        OrderPoint = leadTime*MeanDemand 
+        MeanDemandLT = (currentDemand + sum(currentForecast[:leadTime]))/(leadTime+1) #calculamos la demanda media para poder obtener el tamaño del lote y el punto de pedido ya que no es constante, no sé si hay que calcular la media para todo el forecast lenght o solo hasta el lead time.
+        SafetyStock = 3 * demand_std * np.sqrt(leadTime) # k*stdDemanda durante el lead time
+        OrderPoint = MeanDemandLT + SafetyStock
+        Q = np.sqrt(2*orderingCost*MeanDemandLT/holdingCost) #tamaño del lote
+        onHandLevel = Q/2 + SafetyStock
 
         #decidimos la cantidad a pedir y calculamos los costes si hay stockout
         if onHandLevel < currentDemand: # if the stock is less than the demand, we stockout
             totalStockoutCost += stockoutPenalty * (currentDemand - onHandLevel) #coste de stockout * la cantidad que falta para cubrir la demanda
         if projectedStock<=OrderPoint:
-            orderQuantity = np.sqrt(2*orderingCost*MeanDemand/holdingCost)            
+            orderQuantity = Q
             noOrders += 1
             inTransitStock[t+leadTime]= orderQuantity  # save the order in transit que llegará en el período t+leadTime que es lo que tarda en llegar
         else:
