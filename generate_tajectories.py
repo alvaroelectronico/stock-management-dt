@@ -28,6 +28,9 @@ MAX_DEMAND_STD = 2
 TRAYECTORY_LENGHT = 50
 FORECAST_LENGHT = 10
 
+RETURN_TO_GO_WINDOW = 10
+DEMAND_FORECAST_WINDOW = 5
+
 
 
 
@@ -52,7 +55,7 @@ def generateInstanceData():
 
 def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
     # Extracting input data
-    leadTime = inputData['leadtime']    
+    leadTime = inputData['leadtime'] 
     holdingCost = inputData['holdingCost']
     onHandLevel = inputData['onHandLevel']
     inTransitStock = inputData['inTransitStock'] 
@@ -65,8 +68,21 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
     totalOrderingCost = 0
     totalStockoutCost = 0
     totalIncome = 0
+    totalBenefit = 0
     orderQuantity = 0
     noOrders = 0
+
+    # Calulating EOQ
+
+    orderQuantity = "wilson"
+
+    # Calculating ROP for a given CSL
+    
+        meanDemandLT = (currentDemand + sum(currentForecast[:leadTime]))/(leadTime+1) #calculamos la demanda media para poder obtener el tamaño del lote y el punto de pedido ya que no es constante, no sé si hay que calcular la media para todo el forecast lenght o solo hasta el lead time.
+        safetyStock = 3 * demand_std * np.sqrt(leadTime) # k*stdDemanda durante el lead time
+        reorderPoint = MeanDemandLT + SafetyStock
+        Q = np.sqrt(2*orderingCost*MeanDemandLT/holdingCost) #tamaño del lote
+        onHandLevel = Q/2 + SafetyStock
 
     reward = 0   # En realidad, esto tiene que guardar el benficio medio para el conjunto de la trayectoria.
     trajectory = [] # Esto hay que revisarlo, porque lo que necesitamos es almacenar para cada paso de la trayectoria: estado, acción, return-to-go
@@ -80,7 +96,7 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
         currentDemand = np.random.normal(demand_mean, demand_std)
         currentForecast = np.random.normal(demand_mean, demand_std, size=FORECAST_LENGHT)
 
-        if t in inTransitStock:
+        if t in inTransitStock.keys():
             #Si t es un día de llegada de un pedido en tránsito, entonces se actualiza el nivel de stock en mano con la cantidad que se ha recibido en el período t.
             onHandLevel = onHandLevel + inTransitStock[t] # Esto no lo entiendo, no sé a qué responde. En algunas de las siguientes filas me pasa algo parecido, porfa comento y reviso.
             del inTransitStock[t] #eliminamos la cantidad que se ha recibido del stock en tránsito
@@ -91,7 +107,7 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
             'inTransitStock': dict(inTransitStock),
             'forecast': currentForecast.tolist(),
             'demand': currentDemand,
-            'orderingCost': orderingCost,
+            'orderingCost': orderingCost,  # Fixed cost when placing an order, regardless of the amount ordered
             'holdingCost': holdingCost,
             'stockoutPenalty': stockoutPenalty,
             'unitRevenue': unitRevenue,
@@ -99,31 +115,23 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
             'time_step': t  # Añadimos el paso de tiempo actual
         }
 
+        
+        #Actualizamos el stock físico
+        onHandLevel = max(0, onHandLevel - currentDemand  
+        
         #Calculamos el stock total, que es el stock físico más el stock en tránsito.
-        projectedStock = onHandLevel + sum(inTransitStock.values())
-
-        MeanDemandLT = (currentDemand + sum(currentForecast[:leadTime]))/(leadTime+1) #calculamos la demanda media para poder obtener el tamaño del lote y el punto de pedido ya que no es constante, no sé si hay que calcular la media para todo el forecast lenght o solo hasta el lead time.
-        SafetyStock = 3 * demand_std * np.sqrt(leadTime) # k*stdDemanda durante el lead time
-        OrderPoint = MeanDemandLT + SafetyStock
-        Q = np.sqrt(2*orderingCost*MeanDemandLT/holdingCost) #tamaño del lote
-        onHandLevel = Q/2 + SafetyStock
+        projectedStock = onHandLevel + sum(inTransitStock.values())  #inventory position = on hand/inventoyr level +  on order/in tranit
+       
 
         #decidimos la cantidad a pedir y calculamos los costes si hay stockout
-        if onHandLevel < currentDemand: # if the stock is less than the demand, we stockout
-            totalStockoutCost += stockoutPenalty * (currentDemand - onHandLevel) #coste de stockout * la cantidad que falta para cubrir la demanda
-        if projectedStock<=OrderPoint:
-            orderQuantity = Q
+        if inventoryPosition<=reorderPoint:
             noOrders += 1
             inTransitStock[t+leadTime]= orderQuantity  # save the order in transit que llegará en el período t+leadTime que es lo que tarda en llegar
-        else:
-            orderQuantity = 0  # no order
-
-
-        #Actualizamos el stock físico
-        onHandLevel = onHandLevel - currentDemand 
+            totalOrderingCost += orderingCost
+        
 
         #Calculamos los costes totales
-        totalOrderingCost += orderingCost * orderQuantity
+        totalStockoutCost += stockoutPenalty *max(0, currentDemand - onHandLevel)        
         totalHoldingCost += holdingCost * onHandLevel
         totalIncome += unitRevenue * min(currentDemand, onHandLevel) # el ingreso es el beneficio por la cantidad vendida, que es la demanda actual o el stock físico, lo que sea menor
         reward = (totalIncome - totalHoldingCost - totalStockoutCost - totalOrderingCost)/noOrders
