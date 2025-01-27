@@ -1,6 +1,6 @@
 import numpy as np
 import torch.random
-from tesordict import TensorDict
+from tensordict import TensorDict
 
 
 
@@ -25,7 +25,7 @@ MAX_DEMAND_MEAN = 20
 MIN_DEMAND_STD = 1
 MAX_DEMAND_STD = 2
 
-TRAYECTORY_LENGHT = 50
+TRAYECTORY_LENGHT = 50 
 FORECAST_LENGHT = 10
 
 RETURN_TO_GO_WINDOW = 10
@@ -41,8 +41,7 @@ def generateInstanceData():
     orderingCost = np.random.randint(MIN_ORDERING_COST, MAX_ORDERING_COST)  
     stockoutPenalty = np.random.randint(MIN_STOCKOUT_PENALTY, MAX_STOCKOUT_PENALTY)  
     unitRevenue = np.random.randint(MIN_UNIT_REVENUE, MAX_UNIT_REVENUE)  
-        
-
+    
     inputData = {'leadtime': leadTime, 
                  'holdingCost': holdingCost, 
                  'onHandLevel': onHandLevel,
@@ -68,81 +67,103 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
     totalOrderingCost = 0
     totalStockoutCost = 0
     totalIncome = 0
-    totalBenefit = 0
+    totalBenefit = np.zeros(trajectoryLength)
     orderQuantity = 0
     noOrders = 0
+    
 
+    demand_mean = np.random.randint(MIN_DEMAND_MEAN, MAX_DEMAND_MEAN)
+    demand_std = np.random.randint(MIN_DEMAND_STD, MAX_DEMAND_STD)
+
+    currentDemandInitial = np.random.normal(demand_mean, demand_std)
+    currentForecastInitial = np.random.normal(demand_mean, demand_std, size=FORECAST_LENGHT)
+    
     # Calulating EOQ
-
-    orderQuantity = "wilson"
+    
+    meanDemandLT = (currentDemandInitial + sum(currentForecastInitial[:leadTime]))/(leadTime+1) #calculate the mean demand during the lead time
+    orderQuantity = np.sqrt(2*orderingCost*meanDemandLT/holdingCost)
 
     # Calculating ROP for a given CSL
     
-        meanDemandLT = (currentDemand + sum(currentForecast[:leadTime]))/(leadTime+1) #calculamos la demanda media para poder obtener el tamaño del lote y el punto de pedido ya que no es constante, no sé si hay que calcular la media para todo el forecast lenght o solo hasta el lead time.
-        safetyStock = 3 * demand_std * np.sqrt(leadTime) # k*stdDemanda durante el lead time
-        reorderPoint = MeanDemandLT + SafetyStock
-        Q = np.sqrt(2*orderingCost*MeanDemandLT/holdingCost) #tamaño del lote
-        onHandLevel = Q/2 + SafetyStock
+    safetyStock = 3 * demand_std * np.sqrt(leadTime) 
+    reorderPoint = meanDemandLT + safetyStock
+    onHandLevel = orderQuantity/2 + safetyStock
 
     reward = 0   # En realidad, esto tiene que guardar el benficio medio para el conjunto de la trayectoria.
     trajectory = [] # Esto hay que revisarlo, porque lo que necesitamos es almacenar para cada paso de la trayectoria: estado, acción, return-to-go
 
-    # Por sencillo que pueda ser, comenta cada bloquecito de código (quizá no haga falta siempre cada línea, pero sí cada bloque, en lo que sigue de código hace falta comentar más
-    demand_mean = np.random.randint(MIN_DEMAND_MEAN, MAX_DEMAND_MEAN)
-    demand_std = np.random.randint(MIN_DEMAND_STD, MAX_DEMAND_STD)
     
     for t in range(trajectoryLength):
-        #Generamos la demanda actual y la demanda prevista
+        #generate demand and forecast for the current period
         currentDemand = np.random.normal(demand_mean, demand_std)
         currentForecast = np.random.normal(demand_mean, demand_std, size=FORECAST_LENGHT)
-
-        if t in inTransitStock.keys():
-            #Si t es un día de llegada de un pedido en tránsito, entonces se actualiza el nivel de stock en mano con la cantidad que se ha recibido en el período t.
-            onHandLevel = onHandLevel + inTransitStock[t] # Esto no lo entiendo, no sé a qué responde. En algunas de las siguientes filas me pasa algo parecido, porfa comento y reviso.
-            del inTransitStock[t] #eliminamos la cantidad que se ha recibido del stock en tránsito
         
-        #Definimos el estado del sistema actual
+        if t in inTransitStock.keys():
+            #If t is a day of arrival of a pending order, then the inventory level is updated with the amount received in the period t.
+            onHandLevel = onHandLevel + inTransitStock[t] 
+            del inTransitStock[t] #delete the amount received from the stock in transit 
+        
+        #Define the current state of the system
         state = {
             'onHandLevel': onHandLevel,
             'inTransitStock': dict(inTransitStock),
             'forecast': currentForecast.tolist(),
             'demand': currentDemand,
-            'orderingCost': orderingCost,  # Fixed cost when placing an order, regardless of the amount ordered
-            'holdingCost': holdingCost,
-            'stockoutPenalty': stockoutPenalty,
-            'unitRevenue': unitRevenue,
-            'leadTime': leadTime,
-            'time_step': t  # Añadimos el paso de tiempo actual
+            #'orderingCost': orderingCost,  # Fixed cost when placing an order, regardless of the amount ordered
+            #'holdingCost': holdingCost,
+            #'stockoutPenalty': stockoutPenalty,
+            #'unitRevenue': unitRevenue,
+            #'leadTime': leadTime,
+            'time_step': t  # Add the current time step
         }
+            
 
+        #Update the stock on hand
+        totalStockoutCost += stockoutPenalty *max(0, currentDemand - onHandLevel) # hay que calcularlos antes de actualizar el stock físico
+        totalIncome += unitRevenue * min(currentDemand, onHandLevel) #hay que calcularlo antes de actualizar el stock físico 
+        onHandLevel = max(0, onHandLevel - currentDemand )
         
-        #Actualizamos el stock físico
-        onHandLevel = max(0, onHandLevel - currentDemand  
-        
-        #Calculamos el stock total, que es el stock físico más el stock en tránsito.
-        projectedStock = onHandLevel + sum(inTransitStock.values())  #inventory position = on hand/inventoyr level +  on order/in tranit
-       
+        #Calculate the total stock, which is the physical stock plus the stock in transit.
+        inventoryPosition = onHandLevel + sum(inTransitStock.values())  #inventory position = on hand/inventoyr level +  on order/in transit
 
-        #decidimos la cantidad a pedir y calculamos los costes si hay stockout
-        if inventoryPosition<=reorderPoint:
+        #decide the amount to order and calculate the costs 
+        if inventoryPosition <= reorderPoint:
             noOrders += 1
-            inTransitStock[t+leadTime]= orderQuantity  # save the order in transit que llegará en el período t+leadTime que es lo que tarda en llegar
+            inTransitStock[t+leadTime]= orderQuantity  # save the order in transit that will arrive in the period t+leadTime
             totalOrderingCost += orderingCost
         
 
         #Calculamos los costes totales
-        totalStockoutCost += stockoutPenalty *max(0, currentDemand - onHandLevel)        
+        #totalStockoutCost += stockoutPenalty *max(0, currentDemand - onHandLevel)        
         totalHoldingCost += holdingCost * onHandLevel
-        totalIncome += unitRevenue * min(currentDemand, onHandLevel) # el ingreso es el beneficio por la cantidad vendida, que es la demanda actual o el stock físico, lo que sea menor
+        #totalIncome += unitRevenue * min(currentDemand, onHandLevel)# el ingreso es el beneficio por la cantidad vendida, que es la demanda actual o el stock físico, lo que sea menor
+        totalBenefit[t]=totalIncome - totalHoldingCost - totalStockoutCost - totalOrderingCost 
+    
+    #No se si calcular el beneficio medio por pedido o el beneficio medio de la trayectoria incluyendo los periodos que no hay pedido
+
         reward = (totalIncome - totalHoldingCost - totalStockoutCost - totalOrderingCost)/noOrders
 
-        #Añadimos la trayectoria
+        #if t==0:
+        #    reward = (totalIncome - totalHoldingCost - totalStockoutCost - totalOrderingCost)
+        #else:
+        #   reward = (totalIncome - totalHoldingCost - totalStockoutCost - totalOrderingCost)/t
+
+        
+        #Calculate the return-to-go
+        if t>=RETURN_TO_GO_WINDOW: # if the time step is greater than the return-to-go window
+            #add the benefit from the previous period to the window
+            BenefitToAdd= totalBenefit[t-RETURN_TO_GO_WINDOW]-totalBenefit[t-RETURN_TO_GO_WINDOW-1] # the total benefit is the accumulated benefit, we need to subtract the acumulated benefit from the previos period to the one we are adding
+            #subtract the benefit from the current period from the window
+            benefitToSubstract= totalBenefit[t]-totalBenefit[t-1] # the benefit is the accumulated benefit, we need to subtract the acumulated benefit from the previos period to the one we are substracting
+            reward=(reward*RETURN_TO_GO_WINDOW+BenefitToAdd-benefitToSubstract)/RETURN_TO_GO_WINDOW
+            
+            
+        #Add the trajectory
         trajectory.append({
             'state':state, 
             'action':orderQuantity, 
             'returnToGo':reward})
-
-
+        
     return trajectory
 
 
@@ -156,10 +177,17 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
 if __name__ == "__main__":
     noTrajectories = 100
     trainingData = TensorDict()
-
+    
+    print(f"Iniciando generación de {noTrajectories} trayectorias...")
+    
     for i in range(noTrajectories):
+        print(f"\n{'='*50}")
+        print(f"Generando trayectoria {i+1}/{noTrajectories}")
         inputData = generateInstanceData()
         trajectory = generateTrajectory(inputData)
         addTrajectoryToTrainingData(trajectory, trainingData)
+    
+    print(f"\nGeneración de trayectorias completada.")
+    print(f"Tamaño de datos de entrenamiento: {len(trainingData)}")
 
 
