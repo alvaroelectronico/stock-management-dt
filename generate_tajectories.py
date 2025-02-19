@@ -1,6 +1,9 @@
 import numpy as np
+from pathlib import Path
 import torch.random
 from tensordict import TensorDict
+import scipy.stats as stats # para calcular la k de la distribución normal
+
 
 
 
@@ -25,11 +28,13 @@ MAX_DEMAND_MEAN = 20
 MIN_DEMAND_STD = 1
 MAX_DEMAND_STD = 2
 
-TRAYECTORY_LENGHT = 50
-FORECAST_LENGHT = 10
+TRAYECTORY_LENGHT = 5 #era 50
+FORECAST_LENGHT = 5 #era 10
 
 RETURN_TO_GO_WINDOW = 10 #TODO: Change this to a consisten value
 DEMAND_FORECAST_WINDOW = 5
+
+CSL = 0.95 # Probabilidad de que no haya stockout durante un ciclo
 
 
 
@@ -48,7 +53,7 @@ def generateInstanceData():
                  'orderingCost': orderingCost, 
                  'stockoutPenalty': stockoutPenalty, 
                  'unitRevenue': unitRevenue, 
-                 'inTransitStock': {} } #  dictionary with the pending orders, where the keys are the days and the values are the quantities that will arrive. (initial stock in transit is 0)
+                 'inTransitStock': np.zeros(leadTime-1)} #  list with the pending orders 
     print(inputData)
     return inputData
 
@@ -83,15 +88,15 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
     orderQuantity = np.sqrt(2*orderingCost*demand_mean/holdingCost)
     print(f"Order quantity: {orderQuantity}")
     # Calculating ROP for a given CSL
-    
-    safetyStock = 3 * demand_std * np.sqrt(leadTime)  #generalizar  CSL probabilidad que durante un ciclo haya rotura para definir la k
+    k = stats.norm.ppf(CSL)
+    safetyStock = k * demand_std * np.sqrt(leadTime)  #generalizar  CSL probabilidad que durante un ciclo haya rotura para definir la k
     reorderPoint = demand_mean + safetyStock
     onHandLevel = orderQuantity/2 + safetyStock
 
     print(f"Reorder point: {reorderPoint}, On hand level: {onHandLevel}")
 
     reward = 0   # En realidad, esto tiene que guardar el benficio medio para el conjunto de la trayectoria.
-    trajectory = [] # Esto hay que revisarlo, porque lo que necesitamos es almacenar para cada paso de la trayectoria: estado, acción, return-to-go
+    trajectory = []
 
     
     for t in range(trajectoryLength):
@@ -102,28 +107,28 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
         print(f"\n--- Período {t} ---")
         print(f"Current demand: {currentDemand}, Current forecast: {currentForecast}")
         print(f"Stock actual: {onHandLevel:.2f}")
-        print(f"Stock en tránsito: {sum(inTransitStock.values()):.2f}")
+        print(f"Stock en tránsito: {sum(inTransitStock)}")
         
-        if t in inTransitStock.keys():
-            #If t is a day of arrival of a pending order, then the inventory level is updated with the amount received in the period t.
-            onHandLevel = onHandLevel + inTransitStock[t] 
-            del inTransitStock[t] #delete the amount received from the stock in transit 
+        #I the inventory level is updated with the amount received in the period t.
+        onHandLevel = onHandLevel + inTransitStock[0]  #the first element of the tensor is the amount that will arrive in the period t
+        inTransitStock = np.roll(inTransitStock, -1)  #shift the tensor to the left
+        inTransitStock[-1] = 0  #set to 0 the last element of the tensor which are not used
 
         print(f"Stock actual: {onHandLevel:.2f}")
-        print(f"Stock en tránsito: {sum(inTransitStock.values()):.2f}")
+        print(f"Stock en tránsito: {sum(inTransitStock)}")
 
         #Define the current state of the system
-        state = {
+        state ={
             'onHandLevel': onHandLevel,
-            'inTransitStock': dict(inTransitStock),
-            'forecast': currentForecast.tolist(),
+            'inTransitStock': inTransitStock,
+            'forecast': currentForecast,
             'demand': currentDemand,
             'orderingCost': orderingCost,  # Fixed cost when placing an order, regardless of the amount ordered
             'holdingCost': holdingCost,
-            'stockoutPenalty': stockoutPenalty,
+            'stockoutPenalty':  stockoutPenalty,
             'unitRevenue': unitRevenue,
-            'leadTime': leadTime,
-            'timesçStep': t  # Add the current time step
+            'leadTime':  leadTime,
+            'timesStep': t  # Add the current time step
         }
             
 
@@ -136,13 +141,13 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
         print(f"Income: {totalIncome:.2f}")
         
         #Calculate the total stock, which is the physical stock plus the stock in transit.
-        inventoryPosition = onHandLevel + sum(inTransitStock.values())  #inventory position = on hand/inventoyr level +  on order/in transit
+        inventoryPosition = onHandLevel + sum(inTransitStock)  #inventory position = on hand/inventoyr level +  on order/in transit
         print(f"Inventory position: {inventoryPosition:.2f}")
 
         #decide the amount to order and calculate the costs 
         if inventoryPosition <= reorderPoint:
             noOrders += 1
-            inTransitStock[t+leadTime]= orderQuantity  # save the order in transit that will arrive in the period t+leadTime
+            inTransitStock[-1]= orderQuantity  # save the order in transit that will arrive in the period t+leadTime
             totalOrderingCost += orderingCost
         
         print(f"No orders: {noOrders}")
@@ -159,7 +164,7 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
         trajectory.append({
             'state':state, 
             'action':orderQuantity, 
-            'returnToGo': 0})
+            'returnToGo': 0.0})
         
         #Calculate the reward
 
@@ -174,28 +179,54 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
             BenefitToAdd= totalBenefit[t-RETURN_TO_GO_WINDOW]-totalBenefit[t-RETURN_TO_GO_WINDOW-1] # the total benefit is the accumulated benefit, we need to subtract the acumulated benefit from the previos period to the one we are adding
             #subtract the benefit from the current period from the window
             benefitToSubstract= totalBenefit[t]-totalBenefit[t-1] # the benefit is the accumulated benefit, we need to subtract the acumulated benefit from the previos period to the one we are substracting
-            trajectory[t]['returnToGo']=(reward*RETURN_TO_GO_WINDOW+BenefitToAdd-benefitToSubstract)/RETURN_TO_GO_WINDOW
+            returnToGo=(reward*RETURN_TO_GO_WINDOW+BenefitToAdd-benefitToSubstract)/RETURN_TO_GO_WINDOW
+            trajectory[t]['returnToGo'] = returnToGo
             print(f"Calculo del return-to-go en el periodo {t}:")
             print(f"Benefit to add: {BenefitToAdd:.2f}")
             print(f"Benefit to substract: {benefitToSubstract:.2f}")
         else:
             trajectory[t]['returnToGo']=reward
 
-       
         
     return trajectory
 
 
 
 def addTrajectoryToTrainingData(trajectory, trainingData):
-    return trainingData.append(trajectory)
+    def addPaddingToTransitStock(inTransitStock):
+        padded = np.zeros(MAX_LEAD_TIME - 1)
+        padded[:len(inTransitStock)] = inTransitStock
+        return padded
+    
+    trajectory = TensorDict({
+        'states': TensorDict({
+            'onHandLevel': torch.stack([torch.tensor(t['state']['onHandLevel'], dtype=torch.float) for t in trajectory]),
+            'inTransitStock': torch.stack([torch.tensor(addPaddingToTransitStock(t['state']['inTransitStock']), dtype=torch.float) for t in trajectory]),
+            'demand': torch.stack([torch.tensor(t['state']['demand'], dtype=torch.float) for t in trajectory]),
+            'forecast': torch.stack([torch.tensor(t['state']['forecast'], dtype=torch.float) for t in trajectory]),
+            'leadTime': torch.stack([torch.tensor(t['state']['leadTime'], dtype=torch.float) for t in trajectory]),
+            'holdingCost': torch.stack([torch.tensor(t['state']['holdingCost'], dtype=torch.float) for t in trajectory]),
+            'orderingCost': torch.stack([torch.tensor(t['state']['orderingCost'], dtype=torch.float) for t in trajectory]),
+            'stockoutPenalty': torch.stack([torch.tensor(t['state']['stockoutPenalty'], dtype=torch.float) for t in trajectory]),
+            'unitRevenue': torch.stack([torch.tensor(t['state']['unitRevenue'], dtype=torch.float) for t in trajectory]),
+            'timesStep': torch.stack([torch.tensor(t['state']['timesStep'], dtype=torch.float) for t in trajectory])
+        }),
+        'actions': torch.stack([torch.tensor(t['action'], dtype=torch.float) for t in trajectory]),
+        'returnsToGo': torch.stack([torch.tensor(t['returnToGo'], dtype=torch.float) for t in trajectory])
+    })
+    return trainingData.update(trajectory)
+
 
 
 
 
 if __name__ == "__main__":
-    noTrajectories = 100
-    trainingData = [] #lista
+    noTrajectories = 2 #era 100
+    trainingData =  TensorDict({
+        'states': [],
+        'actions': [],
+        'returnsToGo': []
+    })
     
     print(f"Iniciando generación de {noTrajectories} trayectorias...")
     
@@ -204,7 +235,14 @@ if __name__ == "__main__":
         print(f"Generando trayectoria {i+1}/{noTrajectories}")
         inputData = generateInstanceData()
         trajectory = generateTrajectory(inputData)
-        addTrajectoryToTrainingData(trajectory, trainingData)
+        trainingData = addTrajectoryToTrainingData(trajectory, trainingData)
+
+    # Save the training data to a file
+    def getProjectDirectory():
+        return str(Path(__file__).resolve().parent)
+
+    torch.save(trainingData,
+               getProjectDirectory() + "/data/training_data.pt")
     
     print(f"\nGeneración de trayectorias completada.")
     print(f"Tamaño de datos de entrenamiento: {len(trainingData)}")
