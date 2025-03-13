@@ -90,7 +90,7 @@ class DecisionTransformer(nn.Module):
         #self.createInitialState(tdNew)
         return tdNew
    
-    def forward(self, td): 
+    def forward(self, td, nextOrderQuantity=None): 
 
         batchSize = td["statesEmbedding"].size(0)  
         leadTime = td["leadTime"][0].item() #¿el lead time es el mismo para todos los batches?
@@ -187,7 +187,8 @@ class DecisionTransformer(nn.Module):
         print(f"returnsToGoEmbedding shape: {td['returnsToGoEmbedding'].shape}")
 
         # stack the returns to go embedding, the states embedding and the actions embedding
-        stackedInputs = (
+        if not self.training:
+            stackedInputs = (
                 torch.stack((td["returnsToGoEmbedding"], td["statesEmbedding"],
                              torch.cat((td["actionsEmbedding"],
                                         torch.zeros(batchSize, td["statesEmbedding"].size(1) - td["actionsEmbedding"].size(1), self.embeddingDim, device=self.device)), dim=1)),
@@ -196,11 +197,18 @@ class DecisionTransformer(nn.Module):
                 .reshape(batchSize, 3 * td["statesEmbedding"].size(1), self.embeddingDim)
             )
         
-        #apply the transformer to the stacked inputs
-        output = self.transformer(inputs_embeds=stackedInputs) #¿necesito attention mask?
-        output = output["last_hidden_state"]
-        output = output.reshape(batchSize, td["statesEmbedding"].size(1), 3, self.embeddingDim).permute(0, 2, 1, 3)
-        output = output[:, 1, -1, :] #output = output[:, 2, -1, :]
+            #apply the transformer to the stacked inputs
+            output = self.transformer(inputs_embeds=stackedInputs) #¿necesito attention mask?
+            output = output["last_hidden_state"]
+            output = output.reshape(batchSize, td["statesEmbedding"].size(1), 3, self.embeddingDim).permute(0, 2, 1, 3)
+            output = output[:, 1, -1, :] #output = output[:, 2, -1, :]
+        
+        if nextOrderQuantity is None:
+            orderQuantity = self.outputProjection(output)  # [batchSize, 1]
+            orderQuantity = self.relu(orderQuantity)*100  # Asegura que la cantidad a ordenar sea no negativa, lo multiplico por 100 para ver los resultados
+        else: 
+            orderQuantity = nextOrderQuantity
+
 
         #random_decision = torch.rand(batchSize, 1)  # Número aleatorio entre 0 y 1
         #orderQuantity = torch.where(
@@ -208,12 +216,9 @@ class DecisionTransformer(nn.Module):
         #torch.ones(batchSize, 1) * 100,  # Pedir 100 unidades
         #torch.zeros(batchSize, 1)  # No pedir nada
     #)
-        
-        # project the output to a scalar value and apply a ReLU activation function to get the order quantity
-        orderQuantity = self.outputProjection(output)  # [batchSize, 1]
-        orderQuantity = self.relu(orderQuantity)*100  # Asegura que la cantidad a ordenar sea no negativa
-        td["orderQuantity"] = orderQuantity
+      
 
+        td["orderQuantity"] = orderQuantity
         print("\nDecisión de Orden:")
         print(f"Cantidad ordenada: {td['orderQuantity']}")
     
@@ -360,6 +365,10 @@ class DecisionTransformer(nn.Module):
             result= torch.cat((tensor, data + self.projectTimeData(td["currentTimestep"])), dim=1)
         print(f"Result shape: {result.shape}")
         return result
+    
+    def setInitalReturnToGo(self, td, returnsToGo):
+        td["returnsToGo"] = returnsToGo if returnsToGo is not None else torch.zeros(self.batchSize, device=self.device)
+
 
 
 if __name__ == "__main__":

@@ -209,7 +209,7 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
             'orderingCost': torch.stack([torch.tensor(t['state']['orderingCost'], dtype=torch.float) for t in trajectory]),
             'stockoutPenalty': torch.stack([torch.tensor(t['state']['stockoutPenalty'], dtype=torch.float) for t in trajectory]),
             'unitRevenue': torch.stack([torch.tensor(t['state']['unitRevenue'], dtype=torch.float) for t in trajectory]),
-            'timesStep': torch.stack([torch.tensor(t['state']['timesStep'], dtype=torch.float) for t in trajectory])
+            'timesStep': torch.stack([torch.tensor(t['state']['timesStep'], dtype=torch.float) for t in trajectory]),
         }),
         'actions': torch.stack([torch.tensor(t['action'], dtype=torch.float) for t in trajectory]),
         'returnsToGo': torch.stack([torch.tensor(t['returnToGo'], dtype=torch.float) for t in trajectory])
