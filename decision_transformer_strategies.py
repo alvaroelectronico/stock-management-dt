@@ -23,31 +23,48 @@ class DTTrainingStrategy(TrainingStrategy):
         self.problemData = None
         self.orderQuantityData = None
         self.returnsToGoData = None
+        print(f"dataPath: {self.dataPath}")
 
         #Cargar los datos de los archivos
         for i in range(len(self.dataPath)): 
             element = torch.load(self.dataPath[i])
-            if hasattr(element["states"], "batch_dims"):
-                print("Dimensiones de batch:", element["states"].batch_dims)
-                print("Tamaño de batch:", element["states"].batch_size)
+            
+            #print(element["states"])
+            #batchSize = element["states"].batch_size[0]
+            #if hasattr(element["states"], "batch_dims"):
+            #    print("Dimensiones de batch:", element["states"].batch_dims)
+            #    print("Tamaño de batch:", element["states"].batch_size)
     
+            print("Estructura de datos cargada:", element.keys())
+        
+            # Acceder correctamente a los estados
+            states_dict = element["states"]
+            print("Estados disponibles:", states_dict.keys())
+        
+            batchSize = states_dict.batch_size[0]
 
             #Calcular el porcentaje de datos de entrenamiento
             percentage = 1 if trainPercentage is None else trainPercentage[i]
-            length = math.floor(element["states"]['batchSize'][0] * percentage) #element["problemData"].batch_size[0] * percentage cuando modifique el generate trajectories
+            length = math.floor(batchSize * percentage) #element["problemData"].batch_size[0] * percentage cuando modifique el generate trajectories
             
             #Si es el primer archivo, inicializar los datos
             if i == 0:
-                print(element["states"]['batchSize'][0])
                 #esto me da error porque el generate trajectories lo tengo hecho para un solo batch y los datos no tienen la dimension de batch
-                self.problemData = element["states"][:length]
-                self.orderQuantityData = element["orderQuantity"][:length]
-                self.returnsToGoData = element["returnsToGo"][:length]
+                #self.problemData = element["states"][:length]
+                self.problemData = states_dict
+                #self.orderQuantityData = element["actions"][:length]
+                #self.returnsToGoData = element["returnsToGo"][:length]
+                self.orderQuantityData = element["actions"]
+                self.returnsToGoData = element["returnsToGo"]
             else:
                 #Concatenar los datos de los archivos
-                self.problemData = torch.cat((self.problemData, element["states"][:length]), dim=0)
-                self.orderQuantityData = torch.cat((self.orderQuantityData, element["orderQuantity"][:length]), dim=0)
-                self.returnsToGoData = torch.cat((self.returnsToGoData, element["returnsToGo"][:length]), dim=0)
+                #self.problemData = torch.cat((self.problemData, element["states"][:length]), dim=0)
+                #self.orderQuantityData = torch.cat((self.orderQuantityData, element["orderQuantity"][:length]), dim=0)
+                #self.returnsToGoData = torch.cat((self.returnsToGoData, element["returnsToGo"][:length]), dim=0)
+
+                self.problemData = torch.cat((self.problemData, states_dict), dim=0)
+                self.orderQuantityData = torch.cat([self.orderQuantityData, element["actions"]], dim=0)
+                self.returnsToGoData = torch.cat([self.returnsToGoData, element["returnsToGo"]], dim=0)
 
 
         self.lengthData = self.problemData.batch_size[0]
@@ -111,41 +128,3 @@ class DTTrainingStrategy(TrainingStrategy):
 
         return (batch.clone(), orderQuantity.clone(), returnsToGo.clone())
 
-if __name__ == "__main__":
-    # Ruta de ejemplo a tus archivos de datos
-    data_paths = ["./data/training_data.pt"]  # Reemplaza con tu ruta real
-    train_percentages = [0.8]  # 80% de los datos para entrenamiento
-    
-    # Crear una instancia de la estrategia
-    training_strategy = DTTrainingStrategy(
-        dataPath=data_paths,
-        trainPercentage=train_percentages,
-        shuffle=True,
-        augment=False
-    )
-    
-    print("\n=== Información de la Estrategia de Entrenamiento ===")
-    print(f"Tamaño total de datos: {training_strategy.lengthData}")
-    print(f"Shuffle activado: {training_strategy.shuffle}")
-    print(f"Augment activado: {training_strategy.augment}")
-    
-    # Probar getTrainingData
-    batch_size = 2
-    print(f"\n=== Probando getTrainingData con batch_size={batch_size} ===")
-    
-    # Obtener un batch de datos
-    batch, order_quantity, returns_to_go = training_strategy.getTrainingData(batch_size)
-    
-    print(f"Forma del batch: {batch.shape}")
-    print(f"Forma de order_quantity: {order_quantity.shape}")
-    print(f"Forma de returns_to_go: {returns_to_go.shape}")
-     # Probar el reset de datos
-    print("\n=== Probando reset de datos ===")
-    training_strategy.resetData()
-    print(f"Índice actual después de reset: {training_strategy.currentIndex}")
-    
-    # Probar múltiples batches
-    print("\n=== Probando múltiples batches ===")
-    for i in range(3):
-        batch, _, _ = training_strategy.getTrainingData(batch_size)
-        print(f"Batch {i+1} - Índice actual: {training_strategy.currentIndex}")

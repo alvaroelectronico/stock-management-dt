@@ -210,10 +210,10 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
             'stockoutPenalty': torch.stack([torch.tensor(t['state']['stockoutPenalty'], dtype=torch.float) for t in trajectory]),
             'unitRevenue': torch.stack([torch.tensor(t['state']['unitRevenue'], dtype=torch.float) for t in trajectory]),
             'timesStep': torch.stack([torch.tensor(t['state']['timesStep'], dtype=torch.float) for t in trajectory]),
-        }),
-        'actions': torch.stack([torch.tensor(t['action'], dtype=torch.float) for t in trajectory]),
-        'returnsToGo': torch.stack([torch.tensor(t['returnToGo'], dtype=torch.float) for t in trajectory])
-    })
+        }).unsqueeze(0),
+        'actions': torch.stack([torch.tensor(t['action'], dtype=torch.float) for t in trajectory]).unsqueeze(0),
+        'returnsToGo': torch.stack([torch.tensor(t['returnToGo'], dtype=torch.float) for t in trajectory]).unsqueeze(0)
+    }, batch_size=[1])
     return trainingData.update(trajectory)
 
 
@@ -222,11 +222,8 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
 
 if __name__ == "__main__":
     noTrajectories = 2 #era 100
-    trainingData =  TensorDict({
-        'states': [],
-        'actions': [],
-        'returnsToGo': []
-    })
+    # Inicializar trainingData como None
+    trainingData = TensorDict({}, batch_size=[1])
     
     print(f"Iniciando generación de {noTrajectories} trayectorias...")
     
@@ -246,5 +243,20 @@ if __name__ == "__main__":
     
     print(f"\nGeneración de trayectorias completada.")
     print(f"Tamaño de datos de entrenamiento: {len(trainingData)}")
+    print("Estructura final de los datos:")
+    print("Forma de trainingData:", trainingData.shape)
+    print("Keys en trainingData:", trainingData.keys())
+    print("Forma de states:", trainingData['states'].shape if 'states' in trainingData else "No states")
+    print("Forma de actions:", trainingData['actions'].shape if 'actions' in trainingData else "No actions")
+    print("Forma de returnsToGo:", trainingData['returnsToGo'].shape if 'returnsToGo' in trainingData else "No returnsToGo")
+    print("Tamaño de states:", trainingData['states'])
+    print("\nPrimera trayectoria completa:")
+    trayectoria_idx = 0  # Cambiar para ver otras trayectorias
+    for timestep in range(TRAYECTORY_LENGHT):
+        print(f"\nTimestep {timestep}:")
+        for key in trainingData['states'].keys():
+            print(f"{key}: {trainingData['states'][key][trayectoria_idx][timestep]}")
+        print(f"Action: {trainingData['actions'][trayectoria_idx][timestep]}")
+        print(f"Return to go: {trainingData['returnsToGo'][trayectoria_idx][timestep]}")
 
 

@@ -5,6 +5,7 @@ import torch
 from decision_transformer_strategies import TrainingStrategy
 from decision_transformer_config import DecisionTransformerConfig
 from decision_transformer_strategies import DTTrainingStrategy
+import decision_transformer_strategies
 
 
 
@@ -12,6 +13,15 @@ class DecisionTransformerTrainer(Trainer):
 
     def __init__(self, savePath, name, model, trainerConfig):
         super().__init__(savePath, name, model, trainerConfig)
+
+    def createModel(self):
+        return DecisionTransformer(self.getModelConfig())
+
+    def getModelConfig(self):
+        return self.model.decisionTransformerConfig
+    
+    def getTrainingStrategyModule(self):
+        return decision_transformer_strategies
        
     #Entrenamiento del modelo
     def train(self):
@@ -26,6 +36,9 @@ class DecisionTransformerTrainer(Trainer):
                 #Obtener datos de entrenamiento
                 dtData = self.trainStrategy.getTrainingData(self.nBatch)  # Usar la estrategia de entrenamiento
                 problemData, orderQuantityData, returnsToGoData = dtData
+                print(f"problemData: {problemData}")
+                print(f"orderQuantityData: {orderQuantityData}")
+                print(f"returnsToGoData: {returnsToGoData}")
                 
                 #Poner el modelo en modo entrenamiento
                 self.model.train() 
@@ -73,13 +86,13 @@ if __name__ == "__main__":
     nBatch=32,
     nVal=100,  # Ajusta este valor según tus necesidades
     stepsPerEpoch=10,
-    trainStrategy=DTTrainingStrategy(dataPath=["data/training_data.pt"], trainPercentage=[0.8]),
-    learningRate=1e-4
+    trainStrategy=DTTrainingStrategy(dataPath=["C:/Users/elood/Desktop/DTgestionStock/Stock_management_dt/stock-management-dt/data/training_data.pt"], trainPercentage=[0.8]),
+    lr_scheduler=1e-4
 )
 
     
     print(f"\nConfiguración:")
-    print(f"Learning rate: {config.learningRate}")
+    print(f"Learning rate: {config.lr_scheduler}")
     print(f"Steps per epoch: {config.stepsPerEpoch}")
     print(f"Batch size: {config.nBatch}")
     # Nota: device ya no es parte de TrainerConfig, se determina en la clase Trainer

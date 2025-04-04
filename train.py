@@ -4,7 +4,10 @@ from decision_transformer_config import DecisionTransformerConfig
 from trainer import TrainerConfig
 from decision_transformer_trainer import DecisionTransformerTrainer
 from decision_transformer_strategies import DTTrainingStrategy
-from generate_tajectories import getProjectDirectory
+from pathlib import Path
+
+def getProjectDirectory():
+        return str(Path(__file__).resolve().parent)
 
 if __name__ == "__main__":
 
@@ -34,13 +37,13 @@ if __name__ == "__main__":
     scheduler = optim.lr_scheduler.ConstantLR(optimizer, factor=1.0)
 
     trainStrategy = DTTrainingStrategy(
-    dataPath=[getProjectDirectory() + "/solvers/decision_transformer/training_data/prueba.pt"],
-    trainPercentage=[1],
-    augment=True
-)
+        dataPath=(getProjectDirectory() +"\\data\\training_data2.pt"),
+        trainPercentage=[1],
+        augment=True
+    )
 
     trainerConfig = TrainerConfig(
-        nBatch=128,
+        nBatch=1,
         nVal=400,
         stepsPerEpoch=stepsPerEpoch,
         trainStrategy=trainStrategy,
