@@ -1,4 +1,4 @@
-from torch import nn, optim
+from torch import nn
 from decision_transformer import DecisionTransformer
 from trainer import Trainer, TrainerConfig
 import torch
@@ -6,6 +6,10 @@ from decision_transformer_strategies import TrainingStrategy
 from decision_transformer_config import DecisionTransformerConfig
 from decision_transformer_strategies import DTTrainingStrategy
 import decision_transformer_strategies
+import numpy as np
+from generate_tajectories import TRAYECTORY_LENGHT
+import copy
+from tensordict import TensorDict
 
 
 
@@ -16,6 +20,43 @@ class DecisionTransformerTrainer(Trainer):
 
     def createModel(self):
         return DecisionTransformer(self.getModelConfig())
+    
+    #def testModel(self, model, validationData):
+    #    model.eval()
+    #    averageReward = 0
+    #    results = []
+
+        # Evitamos los calculos de los gradientes
+    #    with torch.inference_mode():
+    #        for traj in range(validationData['states'].batch_size[0]):
+    #            # Reiniciar el estado para esta trayectoria
+    #            current_td = {
+    #                'states': {k: v[traj:traj+1] for k, v in validationData['states'].items()},
+    #                'actions': validationData['actions'][traj:traj+1],
+    #                'returnsToGo': validationData['returnsToGo'][traj:traj+1]
+    #            }
+    #            current_td = TensorDict(current_td, batch_size=[1])
+            
+                # Inicializar esta trayectoria específica
+    #            trajectory_td = model.initModel(current_td)
+            
+                # Simular la trayectoria completa
+    #            for _ in range(TRAYECTORY_LENGHT):
+    #                trajectory_td = model(trajectory_td)
+            
+                # Obtener el return-to-go final de esta trayectoria
+    #            reward = trajectory_td['returnsToGo']
+    #            results.extend(reward.cpu().tolist())
+    #            averageReward += reward.mean()
+
+        # Calcular el promedio sobre todas las trayectorias
+    #    averageReward = averageReward / validationData['states'].batch_size[0]
+
+    #    print("\n=== Resultados de la Validación ===")
+    #    print(f"Número de trayectorias evaluadas: {validationData['states'].batch_size[0]}")
+    #    print(f"Return-to-go promedio: {averageReward:.2f}")
+    
+    #    return averageReward.cpu().item(), np.array(results), 0
 
     def getModelConfig(self):
         return self.model.decisionTransformerConfig
@@ -25,12 +66,21 @@ class DecisionTransformerTrainer(Trainer):
        
     #Entrenamiento del modelo
     def train(self):
+        #validationData = self.getValidationData()
+        #if self.currentEpoch != 0:
+        #    self.bestAverageReward, self.bestResults, _ = self.testModel(self.bestModel, validationData)
+        #    print(f"El modelo actual tiene de validación: {self.bestAverageReward}.")
+
         epoch = 0
+
         
         #Bucle de entrenamiento
         while True:  # Falta condición de parada 
             epochLoss = 0
             currentStep = 1
+            #self.content["EPOCHS"][self.currentEpoch] = [{
+            #    "Starting Validation Reward": self.bestAverageReward
+            #}]
             #Bucle de pasos de entrenamiento de un epoch
             while currentStep <= self.stepsPerEpoch:
                 #Obtener datos de entrenamiento
@@ -55,6 +105,7 @@ class DecisionTransformerTrainer(Trainer):
                 predictedAction = self.model(td)["orderQuantity"]
                 loss = nn.MSELoss()(predictedAction, orderQuantityData)
 
+
                 #backward pass
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1, norm_type=2)
@@ -74,6 +125,73 @@ class DecisionTransformerTrainer(Trainer):
             #Incrementar el contador de epoch
             epoch += 1
 
+            # Validación del modelo
+            #print("\n=== Iniciando validación del modelo ===")
+            #averageNewReward, newResults, _ = self.testModel(self.model, validationData)
+            #print(f"Reward de validación actual: {averageNewReward:.2f}")
+            #print(f"Mejor reward hasta ahora: {self.bestAverageReward:.2f}")
+
+            # Comprobar si el nuevo modelo es mejor
+            #if self.bestAverageReward < averageNewReward:
+            #    pValue = 0
+            #    saveModel = False
+
+                #if self.currentEpoch == 0:
+            #       saveModel = True
+            #       self.bestResults = newResults
+                #else:
+                    # Realizar test estadístico
+                    #from scipy.stats import ttest_rel
+                    #t, p = ttest_rel(newResults, self.bestResults)
+                    #pValue = p / 2
+                    #print(f"P-valor: {pValue}")
+                    #saveModel = pValue < 0.05
+
+                #if saveModel:
+                #    print("Guardando nuevo mejor modelo...")
+                #    modelStateDict = copy.deepcopy(self.model.state_dict())
+                #    self.bestModel.load_state_dict(modelStateDict)
+                #    self.saveBestModel()
+                
+                    # Actualizar mejores resultados
+                    #self.bestAverageReward, self.bestResults, _ = self.testModel(self.bestModel, validationData)
+
+                #self.content["EPOCHS"][self.currentEpoch].append({
+                #    "Step": currentStep - 1,
+                #    "Validation Reward": self.bestAverageReward,
+                #    "P-value": float(pValue),
+                #    "Saved": True
+                #})
+                #else:
+                #    self.content["EPOCHS"][self.currentEpoch].append({
+                #        "Step": currentStep - 1,
+                #        "Validation Reward": averageNewReward,
+                #        "P-value": float(pValue),
+                #        "Saved": False
+                #    })
+            #else:
+            #    print("Modelo no guardado - No hay mejora")
+            #    self.content["EPOCHS"][self.currentEpoch].append({
+            #        "Step": currentStep - 1,
+            #        "Validation Reward": averageNewReward,
+            #        "Saved": False
+            #    })
+
+            # Actualizar información final de la época
+            #self.content["EPOCHS"][self.currentEpoch].append({
+            #    "Ending Validation Reward": self.bestAverageReward,
+            #    "Mean Loss": avgEpochLoss,
+            #})
+
+            # Guardar progreso
+            #self.updateTrackFile()
+        
+            # Guardar checkpoint del modelo actual
+            #self.saveModel()
+        
+            # Preparar siguiente época
+            #self.currentEpoch += 1
+                
            
             
 

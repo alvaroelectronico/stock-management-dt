@@ -30,16 +30,15 @@ if __name__ == "__main__":
     )
 
     model = DecisionTransformer(decisionTransformerConfig)
-    stepsPerEpoch = 20000
+    stepsPerEpoch = 20 # 20000
     #print(f"{sum(t.numel() for t in model.rewardPredictor.parameters()) / 1000 ** 2:.1f}M")
 
     optimizer = optim.Adam(model.parameters(), lr=0.001,  betas=(0.9, 0.999),  eps=1e-08, weight_decay=0)
     scheduler = optim.lr_scheduler.ConstantLR(optimizer, factor=1.0)
 
     trainStrategy = DTTrainingStrategy(
-        dataPath=(getProjectDirectory() +"\\data\\training_data2.pt"),
-        trainPercentage=[1],
-        augment=True
+        dataPath=[str(Path(getProjectDirectory()) / "data" / "training_data.pt")],
+        trainPercentage=[1]
     )
 
     trainerConfig = TrainerConfig(

@@ -35,15 +35,19 @@ class DecisionTransformer(nn.Module):
 
 
 
-         # Projections
+        # Projections
         #projection for the scalar data
         self.projectScalarData= nn.Linear(6, self.embeddingDim) # 6 values: onHandLevel, holdingCost, OrderCost, StockOutPenalty, UnitRevenue, leadTime
         #projection for the stock in transit
         self.projectStockInTransitData= nn.Linear(1, self.embeddingDim)
         #projection for the demand data
-        self.projectDemandData = nn.Linear(1, self.embeddingDim) # FORECAST_LENGHT es el número de períodos de prevision de demanda
+
+        #2 OPCIONES:
+        #self.projectDemandData = nn.Linear(5, self.embeddingDim) # FORECAST_LENGHT es el número de períodos de prevision de demanda
+        self.projectDemandData = nn.Linear(1, self.embeddingDim)
+        
         #projection for the time data
-        maxTimeLength = max(FORECAST_LENGHT*TRAYECTORY_LENGHT, MAX_LEAD_TIME) #hago esto para que el embedding de tiempo tenga suficiente capacidad para almacenar los valores de tiempo de todos los datos (demanda y stock en tránsito)
+        maxTimeLength = max(FORECAST_LENGHT, MAX_LEAD_TIME) #hago esto para que el embedding de tiempo tenga suficiente capacidad para almacenar los valores de tiempo de todos los datos (demanda y stock en tránsito)
         #self.maxSeqLength hiperparametro que determina cuantos pasos de historia se tienen en cuenta para la predicción
         self.projectTimeData = nn.Embedding(maxTimeLength, self.embeddingDim) 
 
@@ -81,24 +85,19 @@ class DecisionTransformer(nn.Module):
         tdNew["onHandLevel"] = td["onHandLevel"]
         tdNew["inTransitStock"] = torch.zeros(batchSize, leadTime-1, dtype=torch.int64) #initially the in transit stock is 0
         tdNew["forecast"] = td["forecast"]
-        #tdNew["demand"]= td["demand"]
         tdNew["orderingCost"] = td["orderingCost"]
         tdNew["stockOutPenalty"] = td["stockoutPenalty"]
         tdNew["unitRevenue"] = td["unitRevenue"]
         tdNew["leadTime"] = td["leadTime"]
-        #tdNew["initialProblemState"] = torch.zeros(batchSize, dtype=torch.int64)
         tdNew["benefit"] = torch.zeros(batchSize, RETURN_TO_GO_WINDOW, dtype=torch.float32)
         tdNew["returnsToGo"] = td["returnsToGo"]
         tdNew["predictedAction"] = torch.zeros(batchSize, 1, dtype=torch.float32)
 
-    
-
+        # Initialize embeddings
         tdNew["statesEmbedding"] = torch.zeros((batchSize, 0, self.embeddingDim), dtype=torch.float, device=device)
         tdNew["actionsEmbedding"] = torch.zeros((batchSize, 0, self.embeddingDim), dtype=torch.float, device=device)
         tdNew["returnsToGoEmbedding"] = torch.zeros((batchSize, 0, self.embeddingDim), dtype=torch.float, device=device)
-
-                                            
-        #self.createInitialState(tdNew)
+                             
         return tdNew
    
     def forward(self, td, nextOrderQuantity=None): 
@@ -111,7 +110,7 @@ class DecisionTransformer(nn.Module):
         print(f"Stock físico: {td['onHandLevel']}")
         print(f"Stock en tránsito: {td['inTransitStock']}")
         print(f"Forecast: {td['forecast']}")
-        print(f"InTransitStock original shape: {td['inTransitStock'].shape}")  # [batch_size, 15]
+        print(f"InTransitStock original shape: {td['inTransitStock'].shape}")  # [batch_size, leadTime-1]
     
 
         # group the scalar data and get the demand and stock in transit data
@@ -126,36 +125,25 @@ class DecisionTransformer(nn.Module):
         
         print(f"\nScalar data: {scalarData}")
 
-        print(f"\nFormas de tensores:")
-        print(f"Forecast original shape: {td['forecast'].shape}")
-
-        print(f"InTransitStock original shape: {td['inTransitStock'].shape}")
-
-        demandData = td["forecast"].view(-1,1) # Aplanar a [batch_size * FORECAST_LENGTH, 1]
-        print(f"Demand data después de view: {demandData.shape}")
-    
+        demandData = td["forecast"]    
         stockInTransitData = td["inTransitStock"].float().unsqueeze(-1)
 
+        batch_size = td["forecast"].shape[0]
         # project the scalar data, the demand and the stock in transit data
+        print(f"Scalar data shape: {scalarData.shape}")
         scalarDataProjection = self.projectScalarData(scalarData)
-        demandDataProjection = self.projectDemandData(demandData)
+        demandDataProjection = self.projectDemandData(demandData.view(-1, 1)) #solo si pongo 1 arriba en la linear
+        demandDataProjection = demandDataProjection.view(batch_size, TRAYECTORY_LENGHT, FORECAST_LENGHT, -1)
+        print(f"DEMAND DATA PROJECTION SHAPE: {demandDataProjection.shape}") # [1,3,5] batch_size = 1, TRAYECTORY_LENGHT = 3, FORECAST_LENGHT = 5
+        demandDataProjection = demandDataProjection.sum(dim=1)
+        print(f"DEMAND DATA PROJECTION SHAPE: {demandDataProjection.shape}")
         stockInTransitDataProjection = self.projectStockInTransitData(stockInTransitData)
 
         # Reorganizar demandDataProjection manteniendo las dimensiones originales del forecast
         batch_size = td["forecast"].shape[0]
         forecast_length = td["forecast"].shape[1]
-        forecast_width = td['forecast'].shape[2]
-
-        print(f"Forecast shape: {td['forecast'].shape}") # [1,5,5] batch_size = 1, forecast_length = 5, forecast_width = 5
-        demandData = td["forecast"].reshape(batch_size, -1, 1) # [1,25,1]
-        print(f"Demand data shape after reshape: {demandData.shape}") 
-        print(f"embedding data: {self.embeddingDim}")
-        
-        demandDataProjection = self.projectDemandData(demandData.reshape(-1, 1)) # [25,128]
         print(f"Demand projection shape before reshape: {demandDataProjection.shape}")
 
-        demandDataProjection = demandDataProjection.reshape(batch_size, forecast_length * forecast_width, self.embeddingDim) # [1,25,128] 1*25*128=3200
-        print(f"Demand projection shape after reshape: {demandDataProjection.shape}")
        # demandDataProjection = demandDataProjection.view(batch_size, forecast_length, self.embeddingDim)
 
         print("\nProyecciones:")
@@ -163,10 +151,9 @@ class DecisionTransformer(nn.Module):
         print(f"Forecast length: {forecast_length}")
         print(f"Embedding dim: {self.embeddingDim}")
         print(f"Demand projection shape: {demandDataProjection.shape}")
-    # Debería ser [batch_size, FORECAST_LENGTH, embeddingDim]    
 
         # project the time data
-        timeIndicesDemand = torch.arange(FORECAST_LENGHT*forecast_width, device=td["forecast"].device).long() #no estoy segura de si es así
+        timeIndicesDemand = torch.arange(FORECAST_LENGHT, device=td["forecast"].device).long() #no estoy segura de si es así
         timeIndicesStockInTransit = torch.arange(leadTime-1, device=td["inTransitStock"].device).long() #considerando que todos los elementos del batch tienen el mismo lead time
         
         timeDataProjectionDemand = self.projectTimeData(timeIndicesDemand) 
@@ -252,16 +239,7 @@ class DecisionTransformer(nn.Module):
         if nextOrderQuantity is None:
             orderQuantity = predictedAction # Asegura que la cantidad a ordenar sea no negativa, lo multiplico por 100 para ver los resultados
         else: 
-            orderQuantity = nextOrderQuantity
-
-
-        #random_decision = torch.rand(batchSize, 1)  # Número aleatorio entre 0 y 1
-        #orderQuantity = torch.where(
-        #random_decision < 0.4,  # Si el número es menor que 0.2 (20% probabilidad)
-        #torch.ones(batchSize, 1) * 100,  # Pedir 100 unidades
-        #torch.zeros(batchSize, 1)  # No pedir nada
-    #)
-      
+            orderQuantity = nextOrderQuantity      
 
         td["orderQuantity"] = orderQuantity
         print("\nDecisión de Orden:")
@@ -372,34 +350,6 @@ class DecisionTransformer(nn.Module):
 
 
         return td
-
-   
-    #def createInitialState(self, td):
-
-        #dataScalar = td['dataScalar'] #incluye los valores inciales del td de onHandLevel, inTransitStock, holdingCost, orderingCost, stockOutPenalty, unitRevenue, leadTime
-        #dataDemand = td['forecast'] #incluye los valores inciales del td de forecast
-        #dataTimeStep = td['timeStep'] #incluye los valores inciales del td de currentTimestep  torch.arange(FORECAST_LENGHT)
-        #dataStockInTransit = td['inTransitStock']
-
-        #scalarDataProjection = self.projectScalarData(dataScalar)
-        #demandDataProjection = self.projectDemandData(dataDemand)
-        #stockInTransitDataProjection = self.projectStockInTransitData(dataStockInTransit)
-        #timeDataProjection = self.projectTimeData(dataTimeStep)
-
-        #demandTimeEmbedding = demandDataProjection + timeDataProjection
-        #stateEmbedding = self.mhaState(
-        #scalarDataProjection.unsqueeze(1),
-        #demandTimeEmbedding,
-        #demandTimeEmbedding
-        #)[0].squeeze(1)
-
-
-        #allData = torch.cat([scalarDataProjection, stateEmbedding], dim=-1)
-        #encodedState = self.encoder(allData)
-
-        #td["initialProblemState"] = encodedState
-        #if not self.training:
-
 
     def addSequenceData(self, td, tensor, data):
         print(f"\nDebug addSequenceData:")

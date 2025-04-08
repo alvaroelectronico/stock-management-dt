@@ -1,7 +1,8 @@
 import torch
 import math
-from generate_tajectories import generateInstanceData
+from generate_tajectories import generateInstanceData, generateTrajectory, addTrajectoryToTrainingData
 from abc import abstractmethod
+from tensordict import TensorDict
 
 #Clase base para estrategias de entrenamiento
 class TrainingStrategy:
@@ -19,6 +20,7 @@ class DTTrainingStrategy(TrainingStrategy):
         super().__init__()
         self.shuffle = shuffle
         self.dataPath = dataPath
+        self.trainPercentage = trainPercentage
 
         self.problemData = None
         self.orderQuantityData = None
@@ -127,4 +129,21 @@ class DTTrainingStrategy(TrainingStrategy):
         #    instance.augment()
 
         return (batch.clone(), orderQuantity.clone(), returnsToGo.clone())
+    
+    #def getValidationData(self, batchSize, nVal):
+    #    validationData = TensorDict({}, batch_size=[1])
+         # Generar nVal trayectorias para validación
+    #    for _ in range(nVal):
+        # Generar datos de entrada usando la función existente
+    #        inputData = generateInstanceData()
+        
+        # Generar trayectoria usando la función existente
+    #        trajectory = generateTrajectory(inputData)
+        
+        # Añadir la trayectoria a los datos de validación
+    #    validationData = addTrajectoryToTrainingData(trajectory, validationData)
+    
+    #    return validationData
 
+
+       

@@ -9,9 +9,13 @@ from abc import abstractmethod
 import logging
 from logger.logger_setup import setup_logging
 import json
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 setup_logging()
+
+def getProjectDirectory():
+        return str(Path(__file__).resolve().parent)
 
 def checkCompileSupport():
     # Verificar si el sistema operativo es Linux
@@ -36,6 +40,14 @@ class TrainerConfig:
 
     def __init__(self, nBatch, nVal, stepsPerEpoch, trainStrategy=None, optimizer=None, lr_scheduler=None):
         
+        if trainStrategy is None:
+            trainStrategy = {
+                "strategy": "DTTrainingStrategy",
+                "strategyArgs": {
+                    "dataPath": [getProjectDirectory() + "/data/training_data.pt"],
+                    "trainPercentage": [1],
+                }
+            }
         self.nBatch = nBatch
         self.nVal = nVal
         self.stepsPerEpoch = stepsPerEpoch 
@@ -44,7 +56,7 @@ class TrainerConfig:
         self.lr_scheduler = lr_scheduler
     
     def to_dict(self):
-        return self.__dict__
+       return self.__dict__
 
 class Trainer:
 
@@ -55,6 +67,8 @@ class Trainer:
         self.trainingSavePath = self.directoryModels + "/training.pt" #guarda el estado actual del modelo durante el entrenamiento (checkpoints), lo dejo como comentario porque no he definido los checkpoints
         self.baselineSavePath = self.directoryModels + "/best.pt" #guarda el mejor modelo, lo dejo como comentario porque no he definido el mejor modelo
         self.trackPath = self.directoryProgress + "/track.json" #guarda el historial de entrenamiento
+        print(self.trackPath)
+        print(f"existe: {os.path.exists(self.trackPath)}")
         #self.jsonPath = self.directoryProgress + "/validation.json" #guarda los resultados de la validacion
 
         #crea los directorios si no existen
@@ -73,15 +87,15 @@ class Trainer:
         self.nVal = trainerConfig.nVal
         self.stepsPerEpoch = trainerConfig.stepsPerEpoch
 
-        #no es necesario porque de momento no tengo las funciones para ver si qué modelo es mejor
-        #self.bestLR = 0
-        #self.currentEpoch = 0
-        #self.bestEpoch = 0
-        #self.bestAverageReward = 0
+        self.bestLR = 0
+        self.currentEpoch = 0
+        self.bestEpoch = 0
+        self.bestAverageReward = 0
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model.to(self.device)
 
+        self.content = None
         #optimizador Adam
         self.optimizer =  None
         #tasa de aprendizaje constante
@@ -92,11 +106,20 @@ class Trainer:
             self.model = torch.compile(self.model)
 
         # Estas variables se utilizarán cuando se implemente la lógica de seguimiento del mejor modelo
-        #self.bestModel = None
-        #self.bestResults = None
+        self.bestModel = None
+        self.bestResults = None
 
     @abstractmethod
     def createModel(self):
+        pass
+
+    #@abstractmethod
+    #def testModel(self, model, validationData):
+    #    pass
+
+
+    @abstractmethod
+    def train(self):
         pass
 
     @abstractmethod
@@ -114,6 +137,7 @@ class Trainer:
 
         # Crear el documento para guardar los pasos del entrenamiento
         if not os.path.isfile(trackPath):
+            print(" no existe")
             self.content = {
                 "NUMBER PARAMETERS": f"{sum(t.numel() for t in self.model.parameters()) / 1000 ** 2:.1f}M",
                 "MODEL INFO": self.getModelConfig().__dict__,
@@ -122,8 +146,13 @@ class Trainer:
             }
 
             self.updateTrackFile()
+            
         else:
+            print(" existe")
+            print(self.trainerConfig.to_dict())
             self.content = self.JSONtoDict(trackPath)
+            if "EPOCHS" not in self.content:
+                self.content["EPOCHS"] = {}
 
         # Obtenemos el checkpoint, que es nulo si es el principio del entrenamiento
         checkpoint, self.optimizer, self.lr_scheduler = \
@@ -150,19 +179,47 @@ class Trainer:
         self.train()
 
     def getStrategy(self):
-        strategyClass = getattr(self.getTrainingStrategyModule(), self.trainStrategy["strategy"])
-        strategy = strategyClass(**self.trainStrategy["strategyArgs"])
+        if isinstance(self.trainStrategy, dict):
+            strategyClass = getattr(self.getTrainingStrategyModule(), self.trainStrategy["strategy"])
+            strategy = strategyClass(**self.trainStrategy["strategyArgs"])
+        else:
+            strategy = self.trainStrategy
         return strategy
-
+    
     def updateTrackFile(self):
-        # Guardar el archivo JSON con el nuevo contenido
+        #Guardar el archivo JSON con el nuevo contenido
+        if hasattr(self.content, 'strategy'):
+            self.content['strategy'] = self.content['strategy'].to_dict()
+    
         with open(self.trackPath, 'w') as f:
             json.dump(self.content, f, indent=4)
 
-    def JSONtoDict(filePath):
-        with open(filePath, 'r') as f:
-            fileData = json.load(f)
-        return fileData
+
+    #def JSONtoDict(self, filePath):
+    #    with open(filePath, 'r') as f:
+    #        fileData = json.load(f)
+    #    return fileData
+    
+    def JSONtoDict(self, trackPath):
+        try:
+            with open(trackPath, 'r') as f:
+                content = f.read()
+                print("\nContenido del archivo JSON:")
+                print(content)
+                return json.loads(content)
+        except json.JSONDecodeError as e:
+            print(f"\nError en línea {e.lineno}, columna {e.colno}")
+            print(f"Caracter específico: {e.pos}")
+            # Mostrar las líneas cercanas al error
+            lines = content.split('\n')
+            start = max(0, e.lineno - 3)
+            end = min(len(lines), e.lineno + 2)
+            print("\nContexto del error:")
+            for i in range(start, end):
+                print(f"Línea {i+1}: {lines[i]}")
+                if i + 1 == e.lineno:
+                    print(" " * (e.colno + 8) + "^-- Error aquí")
+            raise
     
     def saveModel(self):
         torch.save({'model_state': self.model.state_dict(),
@@ -185,6 +242,13 @@ class Trainer:
         if fileExists:
             checkpoint = torch.load(self.baselineSavePath)
             self.bestModel.load_state_dict(checkpoint["model_state"])
+
+    # Generamos los datos de validacion
+    #def getValidationData(self):
+    #    print("=== Obteniendo datos de validación ===")
+    #    validationData = self.strategy.getValidationData(self.nBatch, self.nVal)
+    #    print("=== Datos de validación obtenidos ===")
+    #    return validationData
 
 
     def loadModelFromFile(self):
@@ -232,9 +296,9 @@ if __name__ == "__main__":
     # Configurar parámetros de prueba
     model = SimpleModel()
     config = TrainerConfig(
-        nBatch=32,
+        nBatch=2,
         nVal=100,
-        stepsPerEpoch=2000,
+        stepsPerEpoch=20,
         trainStrategy=TrainingStrategy(),
         
     )
