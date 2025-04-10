@@ -43,11 +43,11 @@ class DecisionTransformer(nn.Module):
         #projection for the demand data
 
         #2 OPCIONES:
-        #self.projectDemandData = nn.Linear(5, self.embeddingDim) # FORECAST_LENGHT es el número de períodos de prevision de demanda
-        self.projectDemandData = nn.Linear(1, self.embeddingDim)
+        self.projectDemandData = nn.Linear(FORECAST_LENGHT, self.embeddingDim) # FORECAST_LENGHT es el número de períodos de prevision de demanda
+        #self.projectDemandData = nn.Linear(1, self.embeddingDim)
         
         #projection for the time data
-        maxTimeLength = max(FORECAST_LENGHT, MAX_LEAD_TIME) #hago esto para que el embedding de tiempo tenga suficiente capacidad para almacenar los valores de tiempo de todos los datos (demanda y stock en tránsito)
+        maxTimeLength = max(TRAYECTORY_LENGHT, MAX_LEAD_TIME) #hago esto para que el embedding de tiempo tenga suficiente capacidad para almacenar los valores de tiempo de todos los datos (demanda y stock en tránsito)
         #self.maxSeqLength hiperparametro que determina cuantos pasos de historia se tienen en cuenta para la predicción
         self.projectTimeData = nn.Embedding(maxTimeLength, self.embeddingDim) 
 
@@ -132,10 +132,11 @@ class DecisionTransformer(nn.Module):
         # project the scalar data, the demand and the stock in transit data
         print(f"Scalar data shape: {scalarData.shape}")
         scalarDataProjection = self.projectScalarData(scalarData)
-        demandDataProjection = self.projectDemandData(demandData.view(-1, 1)) #solo si pongo 1 arriba en la linear
-        demandDataProjection = demandDataProjection.view(batch_size, TRAYECTORY_LENGHT, FORECAST_LENGHT, -1)
+        #demandDataProjection = self.projectDemandData(demandData.view(-1, 1)) #solo si pongo 1 arriba en la linear
+        demandDataProjection = self.projectDemandData(demandData)
+        # demandDataProjection = demandDataProjection.view(batch_size, TRAYECTORY_LENGHT, FORECAST_LENGHT, -1)
         print(f"DEMAND DATA PROJECTION SHAPE: {demandDataProjection.shape}") # [1,3,5] batch_size = 1, TRAYECTORY_LENGHT = 3, FORECAST_LENGHT = 5
-        demandDataProjection = demandDataProjection.sum(dim=1)
+        #demandDataProjection = demandDataProjection.sum(dim=1)
         print(f"DEMAND DATA PROJECTION SHAPE: {demandDataProjection.shape}")
         stockInTransitDataProjection = self.projectStockInTransitData(stockInTransitData)
 
@@ -153,7 +154,7 @@ class DecisionTransformer(nn.Module):
         print(f"Demand projection shape: {demandDataProjection.shape}")
 
         # project the time data
-        timeIndicesDemand = torch.arange(FORECAST_LENGHT, device=td["forecast"].device).long() #no estoy segura de si es así
+        timeIndicesDemand = torch.arange(TRAYECTORY_LENGHT, device=td["forecast"].device).long() #no estoy segura de si es así
         timeIndicesStockInTransit = torch.arange(leadTime-1, device=td["inTransitStock"].device).long() #considerando que todos los elementos del batch tienen el mismo lead time
         
         timeDataProjectionDemand = self.projectTimeData(timeIndicesDemand) 
@@ -216,6 +217,7 @@ class DecisionTransformer(nn.Module):
             output = output[:, 1, -1, :] #output = output[:, 2, -1, :]
             orderQuantity = self.outputProjection(output)  # [batchSize, 1]
             orderQuantity = self.relu(orderQuantity)*100
+            predictedAction = orderQuantity
         
         else:
             stackedInputs = (
@@ -384,7 +386,7 @@ if __name__ == "__main__":
         # Costes y parámetros (valores arbitrarios para prueba)
         'holdingCost': torch.tensor([[5.0]] * batch_size),      # Coste almacenamiento = 5
         'orderingCost': torch.tensor([[100.0]] * batch_size),   # Coste pedido = 100
-        'stockOutPenalty': torch.tensor([[50.0]] * batch_size), # Penalización rotura = 50
+        'stockoutPenalty': torch.tensor([[50.0]] * batch_size), # Penalización rotura = 50
         'unitRevenue': torch.tensor([[20.0]] * batch_size),     # Ingreso unitario = 20
         'leadTime': torch.tensor([[5]] * batch_size),  
         'orderQuantity': torch.tensor([[5]] * batch_size),        # Lead time = 15 períodos
@@ -406,7 +408,7 @@ if __name__ == "__main__":
     print(f"\nParámetros del sistema:")
     print(f"Holding Cost: {td['holdingCost']}")  
     print(f"Ordering Cost: {td['orderingCost']}")
-    print(f"Stockout Penalty: {td['stockOutPenalty']}")
+    print(f"Stockout Penalty: {td['stockoutPenalty']}")
     print(f"Unit Revenue: {td['unitRevenue']}")
     print(f"Lead Time: {td['leadTime']}")
     print(f"returnsToGo: {td['returnsToGo']}")

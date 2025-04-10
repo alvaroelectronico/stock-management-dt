@@ -11,7 +11,7 @@ from logger.logger_setup import setup_logging
 import json
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+# Configurar logging solo una vez
 setup_logging()
 
 def getProjectDirectory():
@@ -87,10 +87,10 @@ class Trainer:
         self.nVal = trainerConfig.nVal
         self.stepsPerEpoch = trainerConfig.stepsPerEpoch
 
-        self.bestLR = 0
-        self.currentEpoch = 0
-        self.bestEpoch = 0
-        self.bestAverageReward = 0
+        #self.bestLR = 0
+        #self.currentEpoch = 0
+        #self.bestEpoch = 0
+        #self.bestAverageReward = 0
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model.to(self.device)
@@ -106,8 +106,8 @@ class Trainer:
             self.model = torch.compile(self.model)
 
         # Estas variables se utilizarán cuando se implemente la lógica de seguimiento del mejor modelo
-        self.bestModel = None
-        self.bestResults = None
+        #self.bestModel = None
+        #self.bestResults = None
 
     @abstractmethod
     def createModel(self):
@@ -133,7 +133,7 @@ class Trainer:
     def initTraining(self):
 
         trackPath = self.trackPath
-        setup_logging(self.directoryModels)
+        #setup_logging(self.directoryModels)
 
         # Crear el documento para guardar los pasos del entrenamiento
         if not os.path.isfile(trackPath):
@@ -169,11 +169,11 @@ class Trainer:
         # Si estamos en la primera epoch, hacemos que la baseline sea el modelo
         # para que compita consigo mismo. Si no, hacemos que compita con el modelo
         # pero fijado
-        if self.currentEpoch == 0:
-            self.bestModel = self.model
-        else:
-            self.loadBestModelFromFile()
-            self.bestModel = self.bestModel.to(self.device)
+        #if self.currentEpoch == 0:
+        #    self.bestModel = self.model
+        #else:
+        #    self.loadBestModelFromFile()
+        #    self.bestModel = self.model
 
         # Generamos datos de validacion
         self.train()
@@ -188,8 +188,12 @@ class Trainer:
     
     def updateTrackFile(self):
         #Guardar el archivo JSON con el nuevo contenido
-        if hasattr(self.content, 'strategy'):
-            self.content['strategy'] = self.content['strategy'].to_dict()
+        if hasattr(self, 'content') and isinstance(self.content, dict):
+            # Si el contenido tiene una estrategia de entrenamiento, convertirla a diccionario
+            if 'TRAINING INFO' in self.content and 'trainStrategy' in self.content['TRAINING INFO']:
+                train_strategy = self.content['TRAINING INFO']['trainStrategy']
+                if hasattr(train_strategy, 'to_dict'):
+                    self.content['TRAINING INFO']['trainStrategy'] = train_strategy.to_dict()
     
         with open(self.trackPath, 'w') as f:
             json.dump(self.content, f, indent=4)
@@ -202,24 +206,87 @@ class Trainer:
     
     def JSONtoDict(self, trackPath):
         try:
+            # Si el archivo no existe, crear uno nuevo con estructura válida
+            if not os.path.exists(trackPath):
+                initial_content = {
+                    "NUMBER PARAMETERS": f"{sum(t.numel() for t in self.model.parameters()) / 1000 ** 2:.1f}M",
+                    "MODEL INFO": self.getModelConfig().__dict__,
+                    "TRAINING INFO": {
+                        "nBatch": self.trainerConfig.nBatch,
+                        "nVal": self.trainerConfig.nVal,
+                        "stepsPerEpoch": self.trainerConfig.stepsPerEpoch,
+                        "trainStrategy": self.trainerConfig.trainStrategy.to_dict() if hasattr(self.trainerConfig.trainStrategy, 'to_dict') else str(self.trainerConfig.trainStrategy)
+                    },
+                    "EPOCHS": {}
+                }
+                with open(trackPath, 'w') as f:
+                    json.dump(initial_content, f, indent=4)
+                return initial_content
+
+            # Si el archivo existe, intentar leerlo
             with open(trackPath, 'r') as f:
                 content = f.read()
-                print("\nContenido del archivo JSON:")
-                print(content)
+                
+            # Si el archivo está vacío, crear contenido inicial
+            if not content.strip():
+                initial_content = {
+                    "NUMBER PARAMETERS": f"{sum(t.numel() for t in self.model.parameters()) / 1000 ** 2:.1f}M",
+                    "MODEL INFO": self.getModelConfig().__dict__,
+                    "TRAINING INFO": {
+                        "nBatch": self.trainerConfig.nBatch,
+                        "nVal": self.trainerConfig.nVal,
+                        "stepsPerEpoch": self.trainerConfig.stepsPerEpoch,
+                        "trainStrategy": self.trainerConfig.trainStrategy.to_dict() if hasattr(self.trainerConfig.trainStrategy, 'to_dict') else str(self.trainerConfig.trainStrategy)
+                    },
+                    "EPOCHS": {}
+                }
+                with open(trackPath, 'w') as f:
+                    json.dump(initial_content, f, indent=4)
+                return initial_content
+
+            # Intentar parsear el JSON
+            try:
                 return json.loads(content)
-        except json.JSONDecodeError as e:
-            print(f"\nError en línea {e.lineno}, columna {e.colno}")
-            print(f"Caracter específico: {e.pos}")
-            # Mostrar las líneas cercanas al error
-            lines = content.split('\n')
-            start = max(0, e.lineno - 3)
-            end = min(len(lines), e.lineno + 2)
-            print("\nContexto del error:")
-            for i in range(start, end):
-                print(f"Línea {i+1}: {lines[i]}")
-                if i + 1 == e.lineno:
-                    print(" " * (e.colno + 8) + "^-- Error aquí")
-            raise
+            except json.JSONDecodeError as e:
+                print(f"\nError en el archivo JSON: {e}")
+                print(f"Línea: {e.lineno}, Columna: {e.colno}")
+                print("Creando nuevo archivo de seguimiento...")
+                
+                # Crear nuevo archivo con estructura válida
+                initial_content = {
+                    "NUMBER PARAMETERS": f"{sum(t.numel() for t in self.model.parameters()) / 1000 ** 2:.1f}M",
+                    "MODEL INFO": self.getModelConfig().__dict__,
+                    "TRAINING INFO": {
+                        "nBatch": self.trainerConfig.nBatch,
+                        "nVal": self.trainerConfig.nVal,
+                        "stepsPerEpoch": self.trainerConfig.stepsPerEpoch,
+                        "trainStrategy": self.trainerConfig.trainStrategy.to_dict() if hasattr(self.trainerConfig.trainStrategy, 'to_dict') else str(self.trainerConfig.trainStrategy)
+                    },
+                    "EPOCHS": {}
+                }
+                with open(trackPath, 'w') as f:
+                    json.dump(initial_content, f, indent=4)
+                return initial_content
+
+        except Exception as e:
+            print(f"\nError inesperado al procesar el archivo JSON: {e}")
+            print("Creando nuevo archivo de seguimiento...")
+            
+            # Crear nuevo archivo con estructura válida
+            initial_content = {
+                "NUMBER PARAMETERS": f"{sum(t.numel() for t in self.model.parameters()) / 1000 ** 2:.1f}M",
+                "MODEL INFO": self.getModelConfig().__dict__,
+                "TRAINING INFO": {
+                    "nBatch": self.trainerConfig.nBatch,
+                    "nVal": self.trainerConfig.nVal,
+                    "stepsPerEpoch": self.trainerConfig.stepsPerEpoch,
+                    "trainStrategy": self.trainerConfig.trainStrategy.to_dict() if hasattr(self.trainerConfig.trainStrategy, 'to_dict') else str(self.trainerConfig.trainStrategy)
+                },
+                "EPOCHS": {}
+            }
+            with open(trackPath, 'w') as f:
+                json.dump(initial_content, f, indent=4)
+            return initial_content
     
     def saveModel(self):
         torch.save({'model_state': self.model.state_dict(),
@@ -228,20 +295,21 @@ class Trainer:
                     'start_epochs': self.currentEpoch,
                     'rng_state': torch.get_rng_state(),
                     'cuda_rng_state': torch.cuda.get_rng_state() if torch.cuda.is_available() else 0,
-                    "best_lr": self.bestLR,
-                    "best_epoch": self.bestEpoch},
+                    #"best_lr": self.bestLR,
+                    #"best_epoch": self.bestEpoch
+                    },
                    self.trainingSavePath,
                    )
     
-    def loadBestModelFromFile(self):
-        self.bestModel = self.createModel()
-        if checkCompileSupport():
-            self.bestModel = torch.compile(self.bestModel)
+    #def loadBestModelFromFile(self):
+    #    self.bestModel = self.createModel()
+    #    if checkCompileSupport():
+    #        self.bestModel = torch.compile(self.bestModel)
 
-        fileExists = os.path.isfile(self.baselineSavePath)
-        if fileExists:
-            checkpoint = torch.load(self.baselineSavePath)
-            self.bestModel.load_state_dict(checkpoint["model_state"])
+    #    fileExists = os.path.isfile(self.baselineSavePath)
+    #    if fileExists:
+    #        checkpoint = torch.load(self.baselineSavePath)
+    #        self.bestModel.load_state_dict(checkpoint["model_state"])
 
     # Generamos los datos de validacion
     #def getValidationData(self):
@@ -270,11 +338,11 @@ class Trainer:
             #cargar el estado del generador de numeros aleatorios
             torch.set_rng_state(checkpoint["rng_state"])
             #guardar el mejor learning rate
-            self.bestLR = checkpoint["best_lr"]
+            #self.bestLR = checkpoint["best_lr"]
             #guardar el numero de epoch actual
             self.currentEpoch = checkpoint["start_epochs"]
             #guardar el numero de epoch con el mejor resultado
-            self.bestEpoch = checkpoint["best_epoch"]
+            #self.bestEpoch = checkpoint["best_epoch"]
             #si hay una GPU, cargar el estado del generador de numeros aleatorios de la GPU
             if torch.cuda.is_available(): torch.cuda.set_rng_state(checkpoint["cuda_rng_state"])
 

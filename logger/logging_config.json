@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "disable_existing_loggers": false,
+  "disable_existing_loggers": true,
   "formatters": {
     "detailed": {
       "()": "logging.Formatter",
@@ -8,10 +8,10 @@
       "datefmt": "%Y-%m-%d %H:%M:%S%z"
     },
     "console_colored": {
-            "()": "logger_setup.ColoredFormatter",
-            "format": "[%(asctime)s]: %(levelname)s - %(module)s - %(funcName)s: %(message)s",
-            "datefmt": "%Y-%m-%d %H:%M:%S%z"
-        }
+      "()": "logger_setup.ColoredFormatter",
+      "format": "[%(asctime)s]: %(levelname)s - %(module)s - %(funcName)s: %(message)s",
+      "datefmt": "%Y-%m-%d %H:%M:%S%z"
+    }
   },
   "handlers": {
     "console": {
@@ -22,19 +22,13 @@
     },
     "file": {
       "class": "logging.FileHandler",
-      "level": "INFO",
+      "level": "DEBUG",
       "formatter": "detailed",
-      "filename": "logger/logs/execution_log.txt",
-      "encoding": "utf-8"
+      "filename": "default.log"
     }
   },
-  "loggers": {
-    "baobab_logging": {
-      "level": "INFO",
-      "handlers": [
-        "file",
-        "console"
-      ]
-    }
+  "root": {
+    "level": "DEBUG",
+    "handlers": ["console", "file"]
   }
 }

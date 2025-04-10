@@ -10,6 +10,8 @@ import numpy as np
 from generate_tajectories import TRAYECTORY_LENGHT
 import copy
 from tensordict import TensorDict
+import os
+import json
 
 
 
@@ -64,31 +66,45 @@ class DecisionTransformerTrainer(Trainer):
     def getTrainingStrategyModule(self):
         return decision_transformer_strategies
        
+    def saveTrainingMetrics(self):
+        """Guarda las métricas de entrenamiento en un archivo JSON"""
+        metrics_path = os.path.join(self.directoryProgress, "training_metrics.json")
+        metrics_data = {
+            'epoch_losses': self.training_metrics['epoch_losses'],
+            'validation_losses': self.training_metrics['validation_losses'],
+            'final_learning_rate': self.optimizer.param_groups[0]['lr']
+        }
+        with open(metrics_path, 'w') as f:
+            json.dump(metrics_data, f, indent=4)
+        print(f"Métricas guardadas en: {metrics_path}")
+
     #Entrenamiento del modelo
     def train(self):
-        #validationData = self.getValidationData()
-        #if self.currentEpoch != 0:
-        #    self.bestAverageReward, self.bestResults, _ = self.testModel(self.bestModel, validationData)
-        #    print(f"El modelo actual tiene de validación: {self.bestAverageReward}.")
-
         epoch = 0
-
+        
+        print("\n=== Iniciando entrenamiento ===")
+        print(f"Pasos por época: {self.stepsPerEpoch}")
+        print(f"Tamaño del batch: {self.nBatch}")
+        
+        # Inicializar métricas
+        self.training_metrics = {
+            'epoch_losses': [],
+            'validation_losses': [],
+        }
         
         #Bucle de entrenamiento
-        while True:  # Falta condición de parada 
+        while True:
+            print(f"\n=== Comenzando época {epoch} ===")
             epochLoss = 0
             currentStep = 1
-            #self.content["EPOCHS"][self.currentEpoch] = [{
-            #    "Starting Validation Reward": self.bestAverageReward
-            #}]
+            
             #Bucle de pasos de entrenamiento de un epoch
             while currentStep <= self.stepsPerEpoch:
+                print(f"Paso {currentStep}/{self.stepsPerEpoch}")
+                
                 #Obtener datos de entrenamiento
-                dtData = self.trainStrategy.getTrainingData(self.nBatch)  # Usar la estrategia de entrenamiento
+                dtData = self.trainStrategy.getTrainingData(self.nBatch)
                 problemData, orderQuantityData, returnsToGoData = dtData
-                print(f"problemData: {problemData}")
-                print(f"orderQuantityData: {orderQuantityData}")
-                print(f"returnsToGoData: {returnsToGoData}")
                 
                 #Poner el modelo en modo entrenamiento
                 self.model.train() 
@@ -97,14 +113,13 @@ class DecisionTransformerTrainer(Trainer):
                 returnsToGoData = returnsToGoData.to(self.device)
                 td = problemData.to(self.device)
                 
-                #inicializar el modelo con los datos del problema revisar
+                #inicializar el modelo con los datos del problema
                 self.model.setInitalReturnToGo(td, returnsToGoData) 
                 td = self.model.initModel(td)
 
                 #forward pass y calculo de perdidas
                 predictedAction = self.model(td)["orderQuantity"]
                 loss = nn.MSELoss()(predictedAction, orderQuantityData)
-
 
                 #backward pass
                 loss.backward()
@@ -115,106 +130,106 @@ class DecisionTransformerTrainer(Trainer):
 
                 #Sumar la pérdida del paso actual al total del epoch
                 epochLoss += loss.item()
+                print(f"Pérdida del paso: {loss.item():.4f}")
 
                 #Incrementar el contador de pasos
                 currentStep += 1
             
             avgEpochLoss = epochLoss / self.stepsPerEpoch
-            print(f"Epoch {epoch}, Pérdida promedio: {avgEpochLoss:.4f}")
+            self.training_metrics['epoch_losses'].append(avgEpochLoss)
+            print(f"\nResumen de época {epoch}:")
+            print(f"Pérdida promedio: {avgEpochLoss:.4f}")
+            
+            # Validación del modelo
+            print("\nIniciando validación...")
+            validation_loss = self.validate_model()
+            self.training_metrics['validation_losses'].append(validation_loss)
+            print(f"Pérdida de validación: {validation_loss:.4f}")
+            
+            # Actualizar mejor modelo si es necesario
+            #if validation_loss < best_validation_loss:
+            #    best_validation_loss = validation_loss
+            #    self.training_metrics['best_validation_loss'] = validation_loss
+            #    self.training_metrics['best_epoch'] = epoch
+            #    epochs_without_improvement = 0
+            #    print("¡Nuevo mejor modelo encontrado! Guardando...")
+            #    self.saveBestModel()
+            #else:
+            #    epochs_without_improvement += 1
+            #    print(f"Épocas sin mejora: {epochs_without_improvement}/{patience}")
+            
+            # Guardar métricas en el archivo de seguimiento
+            print("Guardando métricas en track.json...")
+            self.content["EPOCHS"][epoch] = {
+                "training_loss": avgEpochLoss,
+                "validation_loss": validation_loss,
+                "learning_rate": self.optimizer.param_groups[0]['lr']
+            }
+            self.updateTrackFile()
+            print("Métricas guardadas exitosamente")
             
             #Incrementar el contador de epoch
             epoch += 1
-
-            # Validación del modelo
-            #print("\n=== Iniciando validación del modelo ===")
-            #averageNewReward, newResults, _ = self.testModel(self.model, validationData)
-            #print(f"Reward de validación actual: {averageNewReward:.2f}")
-            #print(f"Mejor reward hasta ahora: {self.bestAverageReward:.2f}")
-
-            # Comprobar si el nuevo modelo es mejor
-            #if self.bestAverageReward < averageNewReward:
-            #    pValue = 0
-            #    saveModel = False
-
-                #if self.currentEpoch == 0:
-            #       saveModel = True
-            #       self.bestResults = newResults
-                #else:
-                    # Realizar test estadístico
-                    #from scipy.stats import ttest_rel
-                    #t, p = ttest_rel(newResults, self.bestResults)
-                    #pValue = p / 2
-                    #print(f"P-valor: {pValue}")
-                    #saveModel = pValue < 0.05
-
-                #if saveModel:
-                #    print("Guardando nuevo mejor modelo...")
-                #    modelStateDict = copy.deepcopy(self.model.state_dict())
-                #    self.bestModel.load_state_dict(modelStateDict)
-                #    self.saveBestModel()
-                
-                    # Actualizar mejores resultados
-                    #self.bestAverageReward, self.bestResults, _ = self.testModel(self.bestModel, validationData)
-
-                #self.content["EPOCHS"][self.currentEpoch].append({
-                #    "Step": currentStep - 1,
-                #    "Validation Reward": self.bestAverageReward,
-                #    "P-value": float(pValue),
-                #    "Saved": True
-                #})
-                #else:
-                #    self.content["EPOCHS"][self.currentEpoch].append({
-                #        "Step": currentStep - 1,
-                #        "Validation Reward": averageNewReward,
-                #        "P-value": float(pValue),
-                #        "Saved": False
-                #    })
-            #else:
-            #    print("Modelo no guardado - No hay mejora")
-            #    self.content["EPOCHS"][self.currentEpoch].append({
-            #        "Step": currentStep - 1,
-            #        "Validation Reward": averageNewReward,
-            #        "Saved": False
-            #    })
-
-            # Actualizar información final de la época
-            #self.content["EPOCHS"][self.currentEpoch].append({
-            #    "Ending Validation Reward": self.bestAverageReward,
-            #    "Mean Loss": avgEpochLoss,
-            #})
-
-            # Guardar progreso
-            #self.updateTrackFile()
-        
-            # Guardar checkpoint del modelo actual
-            #self.saveModel()
-        
-            # Preparar siguiente época
-            #self.currentEpoch += 1
-                
-           
             
+        # Guardar el modelo final y las métricas
+            print("\n=== Guardando modelo final y métricas ===")
+            self.saveModel()
+            self.saveTrainingMetrics()
+            print("Modelo y métricas guardados exitosamente")
 
+    def validate_model(self):
+        print("\nIniciando validación del modelo...")
+        self.model.eval()  # Poner el modelo en modo evaluación
+        total_loss = 0
+        n_val = self.nVal  # Número de muestras de validación (10 en tu caso)
+        
+        with torch.no_grad():
+            for _ in range(n_val):
+                # Obtener datos de validación
+                dtData = self.trainStrategy.getValidationData(self.nBatch)
+                problemData, orderQuantityData, returnsToGoData = dtData
+                
+                # Convertir los datos a la GPU si está disponible
+                orderQuantityData = orderQuantityData.to(self.device)
+                returnsToGoData = returnsToGoData.to(self.device)
+                td = problemData.to(self.device)
+                
+                # Inicializar el modelo
+                self.model.setInitalReturnToGo(td, returnsToGoData)
+                td = self.model.initModel(td)
+                
+                # Forward pass
+                predictedAction = self.model(td)["orderQuantity"]
+                
+                # Calcular pérdida
+                loss = nn.MSELoss()(predictedAction, orderQuantityData)
+                
+                total_loss += loss.item()
+        
+        self.model.train()  # Volver al modo de entrenamiento
+        return total_loss / n_val
+
+           
+        
                 
 if __name__ == "__main__":
     print("\n=== Iniciando prueba del DecisionTransformerTrainer ===")
     
     # Configuración básica
     config = TrainerConfig(
-    nBatch=32,
-    nVal=100,  # Ajusta este valor según tus necesidades
-    stepsPerEpoch=10,
-    trainStrategy=DTTrainingStrategy(dataPath=["C:/Users/elood/Desktop/DTgestionStock/Stock_management_dt/stock-management-dt/data/training_data.pt"], trainPercentage=[0.8]),
-    lr_scheduler=1e-4
-)
-
+        nBatch=32,
+        nVal=100,  # Ajusta este valor según tus necesidades
+        stepsPerEpoch=10,
+        trainStrategy=DTTrainingStrategy(dataPath=["C:/Users/elood/Desktop/DTgestionStock/Stock_management_dt/stock-management-dt/data/training_data.pt"], trainPercentage=[0.8]),
+        lr_scheduler=1e-4
+    )
     
     print(f"\nConfiguración:")
     print(f"Learning rate: {config.lr_scheduler}")
     print(f"Steps per epoch: {config.stepsPerEpoch}")
     print(f"Batch size: {config.nBatch}")
-    # Nota: device ya no es parte de TrainerConfig, se determina en la clase Trainer
     print(f"Device: {'cuda' if torch.cuda.is_available() else 'cpu'}")
+    
     try:
         # Crear el modelo
         print("\nCreando modelo Decision Transformer...")
@@ -222,11 +237,11 @@ if __name__ == "__main__":
             decisionTransformerConfig=DecisionTransformerConfig())
         print("Modelo creado exitosamente")
         
-         # Crear el trainer
+        # Crear el trainer
         print("\nCreando trainer...")
         trainer = DecisionTransformerTrainer(
-            savePath="./checkpoints",
-            name="dt_test",
+            savePath="./training_models",  # Cambiado a training_models
+            name="decision_transformer_model",  # Nombre más descriptivo
             model=model,
             trainerConfig=config
         )
@@ -240,6 +255,7 @@ if __name__ == "__main__":
         trainer.train()
         
         print("\n=== Entrenamiento completado exitosamente ===")
+        print(f"Modelo guardado en: ./training_models/decision_transformer_model")
         
     except Exception as e:
         print("\n=== Error durante la ejecución ===")

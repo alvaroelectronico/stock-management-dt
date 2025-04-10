@@ -129,21 +129,33 @@ class DTTrainingStrategy(TrainingStrategy):
         #    instance.augment()
 
         return (batch.clone(), orderQuantity.clone(), returnsToGo.clone())
-    
-    #def getValidationData(self, batchSize, nVal):
-    #    validationData = TensorDict({}, batch_size=[1])
-         # Generar nVal trayectorias para validación
-    #    for _ in range(nVal):
-        # Generar datos de entrada usando la función existente
-    #        inputData = generateInstanceData()
+
+
+    def getValidationData(self, batchSize):
+        # Generar datos de validación usando las funciones existentes
+        validationData = TensorDict({}, batch_size=[1])
         
-        # Generar trayectoria usando la función existente
-    #        trajectory = generateTrajectory(inputData)
+        # Generar una trayectoria de validación
+        inputData = generateInstanceData()
+        trajectory = generateTrajectory(inputData)
+        validationData = addTrajectoryToTrainingData(trajectory, validationData)
         
-        # Añadir la trayectoria a los datos de validación
-    #    validationData = addTrajectoryToTrainingData(trajectory, validationData)
-    
-    #    return validationData
+        # Extraer los datos necesarios
+        problemData = validationData['states']
+        orderQuantityData = validationData['actions']
+        returnsToGoData = validationData['returnsToGo']
+        
+        return (problemData.clone(), orderQuantityData.clone(), returnsToGoData.clone())
+
+    def to_dict(self):
+        """Convierte la estrategia en un diccionario serializable"""
+        return {
+            'dataPath': self.dataPath,
+            'trainPercentage': self.trainPercentage,
+            'shuffle': self.shuffle,
+            'augment': False  # No serializamos los datos cargados
+        }
+
 
 
        

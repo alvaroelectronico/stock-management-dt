@@ -30,7 +30,7 @@ if __name__ == "__main__":
     )
 
     model = DecisionTransformer(decisionTransformerConfig)
-    stepsPerEpoch = 20 # 20000
+    stepsPerEpoch = 5 # 20000
     #print(f"{sum(t.numel() for t in model.rewardPredictor.parameters()) / 1000 ** 2:.1f}M")
 
     optimizer = optim.Adam(model.parameters(), lr=0.001,  betas=(0.9, 0.999),  eps=1e-08, weight_decay=0)
@@ -43,7 +43,7 @@ if __name__ == "__main__":
 
     trainerConfig = TrainerConfig(
         nBatch=1,
-        nVal=400,
+        nVal=10, #400,
         stepsPerEpoch=stepsPerEpoch,
         trainStrategy=trainStrategy,
         optimizer=optimizer,
@@ -52,5 +52,11 @@ if __name__ == "__main__":
 
     savePath = (getProjectDirectory() +
                 "/training_models/decision_transformer/")
-    trainer = DecisionTransformerTrainer(savePath=savePath, name="v4", model=model, trainerConfig=trainerConfig)
+    trainer = DecisionTransformerTrainer(savePath=savePath, name="test_model", model=model, trainerConfig=trainerConfig)
+    
+    print("\n=== Iniciando prueba del modelo ===")
+    print(f"Steps por epoch: {stepsPerEpoch}")
+    print(f"Batch size: {trainerConfig.nBatch}")
+    print(f"Tamaño de validación: {trainerConfig.nVal}")
+    
     trainer.initTraining()
