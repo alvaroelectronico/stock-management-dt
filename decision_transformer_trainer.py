@@ -12,6 +12,7 @@ import copy
 from tensordict import TensorDict
 import os
 import json
+from datetime import datetime
 
 
 
@@ -23,43 +24,6 @@ class DecisionTransformerTrainer(Trainer):
     def createModel(self):
         return DecisionTransformer(self.getModelConfig())
     
-    #def testModel(self, model, validationData):
-    #    model.eval()
-    #    averageReward = 0
-    #    results = []
-
-        # Evitamos los calculos de los gradientes
-    #    with torch.inference_mode():
-    #        for traj in range(validationData['states'].batch_size[0]):
-    #            # Reiniciar el estado para esta trayectoria
-    #            current_td = {
-    #                'states': {k: v[traj:traj+1] for k, v in validationData['states'].items()},
-    #                'actions': validationData['actions'][traj:traj+1],
-    #                'returnsToGo': validationData['returnsToGo'][traj:traj+1]
-    #            }
-    #            current_td = TensorDict(current_td, batch_size=[1])
-            
-                # Inicializar esta trayectoria específica
-    #            trajectory_td = model.initModel(current_td)
-            
-                # Simular la trayectoria completa
-    #            for _ in range(TRAYECTORY_LENGHT):
-    #                trajectory_td = model(trajectory_td)
-            
-                # Obtener el return-to-go final de esta trayectoria
-    #            reward = trajectory_td['returnsToGo']
-    #            results.extend(reward.cpu().tolist())
-    #            averageReward += reward.mean()
-
-        # Calcular el promedio sobre todas las trayectorias
-    #    averageReward = averageReward / validationData['states'].batch_size[0]
-
-    #    print("\n=== Resultados de la Validación ===")
-    #    print(f"Número de trayectorias evaluadas: {validationData['states'].batch_size[0]}")
-    #    print(f"Return-to-go promedio: {averageReward:.2f}")
-    
-    #    return averageReward.cpu().item(), np.array(results), 0
-
     def getModelConfig(self):
         return self.model.decisionTransformerConfig
     
@@ -69,13 +33,38 @@ class DecisionTransformerTrainer(Trainer):
     def saveTrainingMetrics(self):
         """Guarda las métricas de entrenamiento en un archivo JSON"""
         metrics_path = os.path.join(self.directoryProgress, "training_metrics.json")
+        
+        # Preparar los datos para guardar
         metrics_data = {
             'epoch_losses': self.training_metrics['epoch_losses'],
             'validation_losses': self.training_metrics['validation_losses'],
-            'final_learning_rate': self.optimizer.param_groups[0]['lr']
+            'final_learning_rate': self.optimizer.param_groups[0]['lr'],
+            'ordered_quantities': []  # Añadir las cantidades ordenadas
         }
+        
+        # Procesar y guardar las cantidades ordenadas
+        for batch_data in self.training_metrics['ordered_quantities']:
+            epoch_data = {
+                'epoch': batch_data['epoch'],
+                'training_step': batch_data['training_step'],
+                'trajectory': []
+            }
+            
+            # Procesar cada paso de la trayectoria
+            for t, (pred, real) in enumerate(zip(batch_data['allPredictedActions'], batch_data['allRealActions'])):
+                trajectory_step = {
+                    'step': t,
+                    'real_quantity': real.cpu().detach().numpy().tolist(),
+                    'predicted_quantity': pred.cpu().detach().numpy().tolist()
+                }
+                epoch_data['trajectory'].append(trajectory_step)
+            
+            metrics_data['ordered_quantities'].append(epoch_data)
+        
+        # Guardar en el archivo
         with open(metrics_path, 'w') as f:
             json.dump(metrics_data, f, indent=4)
+        
         print(f"Métricas guardadas en: {metrics_path}")
 
     #Entrenamiento del modelo
@@ -90,6 +79,7 @@ class DecisionTransformerTrainer(Trainer):
         self.training_metrics = {
             'epoch_losses': [],
             'validation_losses': [],
+            'ordered_quantities': []  # Nueva métrica para cantidades ordenadas
         }
         
         #Bucle de entrenamiento
@@ -100,7 +90,7 @@ class DecisionTransformerTrainer(Trainer):
             
             #Bucle de pasos de entrenamiento de un epoch
             while currentStep <= self.stepsPerEpoch:
-                print(f"Paso {currentStep}/{self.stepsPerEpoch}")
+                print(f"\nStep {currentStep}/{self.stepsPerEpoch}")
                 
                 #Obtener datos de entrenamiento
                 dtData = self.trainStrategy.getTrainingData(self.nBatch)
@@ -108,7 +98,8 @@ class DecisionTransformerTrainer(Trainer):
                 
                 #Poner el modelo en modo entrenamiento
                 self.model.train() 
-                #Convertir los datos a la GPU si está disponible
+                
+                # Convertir los datos a la GPU si está disponible
                 orderQuantityData = orderQuantityData.to(self.device)
                 returnsToGoData = returnsToGoData.to(self.device)
                 td = problemData.to(self.device)
@@ -117,22 +108,53 @@ class DecisionTransformerTrainer(Trainer):
                 self.model.setInitalReturnToGo(td, returnsToGoData) 
                 td = self.model.initModel(td)
 
-                #forward pass y calculo de perdidas
-                predictedAction = self.model(td)["orderQuantity"]
-                loss = nn.MSELoss()(predictedAction, orderQuantityData)
-
-                #backward pass
+                # Variables para almacenar predicciones y valores reales de la trayectoria
+                allPredictedActions = []
+                allRealActions = []
+                
+                # Procesar la trayectoria completa
+                trajectoryLength = orderQuantityData.size(1)  # Longitud de la trayectoria
+                print(f"Procesando trayectoria de longitud {trajectoryLength}")
+                
+                for t in range(trajectoryLength):
+                    print(f"  Paso {t+1}/{trajectoryLength} de la trayectoria")
+                    
+                    # Forward pass
+                    td = self.model.forward(td)
+                    predictedAction = td["orderQuantity"]
+                    
+                    # Guardar predicción y valor real
+                    allPredictedActions.append(predictedAction)
+                    allRealActions.append(orderQuantityData[:, t:t+1])
+                    
+                    print(f"  Predicción: {predictedAction.item():.2f}, Real: {orderQuantityData[:, t].item():.2f}")
+                
+                # Calcular la pérdida para toda la trayectoria
+                predictedTensor = torch.cat(allPredictedActions, dim=1)
+                realTensor = torch.cat(allRealActions, dim=1)
+                loss = nn.MSELoss()(predictedTensor, realTensor)
+                
+                # Guardar las cantidades de la trayectoria
+                batch_quantities = {
+                    'epoch': epoch,
+                    'training_step': currentStep,
+                    'allPredictedActions': allPredictedActions,
+                    'allRealActions': allRealActions
+                }
+                self.training_metrics['ordered_quantities'].append(batch_quantities)
+                
+                # Backward pass
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1, norm_type=2)
                 self.optimizer.step()
                 self.optimizer.zero_grad()
-                self.lr_scheduler.step() 
-
-                #Sumar la pérdida del paso actual al total del epoch
+                self.lr_scheduler.step()
+                
+                # Acumular la pérdida
                 epochLoss += loss.item()
-                print(f"Pérdida del paso: {loss.item():.4f}")
-
-                #Incrementar el contador de pasos
+                print(f"Pérdida de la trayectoria: {loss.item():.4f}")
+                
+                # Incrementar el contador de steps
                 currentStep += 1
             
             avgEpochLoss = epochLoss / self.stepsPerEpoch
@@ -217,10 +239,10 @@ if __name__ == "__main__":
     
     # Configuración básica
     config = TrainerConfig(
-        nBatch=32,
+        nBatch=1,#32
         nVal=100,  # Ajusta este valor según tus necesidades
         stepsPerEpoch=10,
-        trainStrategy=DTTrainingStrategy(dataPath=["C:/Users/elood/Desktop/DTgestionStock/Stock_management_dt/stock-management-dt/data/training_data.pt"], trainPercentage=[0.8]),
+        trainStrategy=DTTrainingStrategy(dataPath=["C:/Users/elood/Desktop/DTgestionStock/Stock_management_dt/stock-management-dt/data/training_data.pt"]),
         lr_scheduler=1e-4
     )
     

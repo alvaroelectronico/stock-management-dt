@@ -28,11 +28,11 @@ MAX_DEMAND_MEAN = 20
 MIN_DEMAND_STD = 1
 MAX_DEMAND_STD = 2
 
-TRAYECTORY_LENGHT = 3 #era 50
-FORECAST_LENGHT = 5 #era 10
+TRAYECTORY_LENGHT = 10 #era 50
+FORECAST_LENGHT = 10 #era 10
 
 RETURN_TO_GO_WINDOW = 10 #TODO: Change this to a consisten value
-DEMAND_FORECAST_WINDOW = 5
+DEMAND_FORECAST_WINDOW = 10
 
 CSL = 0.95 # Probabilidad de que no haya stockout durante un ciclo
 
@@ -98,7 +98,6 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
     reward = 0   # En realidad, esto tiene que guardar el benficio medio para el conjunto de la trayectoria.
     trajectory = []
 
-    
     for t in range(trajectoryLength):
         #generate demand and forecast for the current period
         currentDemand = np.random.normal(demand_mean, demand_std)
@@ -149,6 +148,8 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
             noOrders += 1
             inTransitStock[-1]= orderQuantity  # save the order in transit that will arrive in the period t+leadTime
             totalOrderingCost += orderingCost
+        else:
+            orderQuantity = 0
         
         print(f"No orders: {noOrders}")
         print(f"stock en transito: {inTransitStock}")

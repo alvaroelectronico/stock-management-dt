@@ -16,64 +16,67 @@ class TrainingStrategy:
 #Estrategia de entrenamiento para Decision Transformer
 class DTTrainingStrategy(TrainingStrategy):
 
-    def __init__(self, dataPath : list, trainPercentage : list = None, shuffle=True, augment=False):
+    def __init__(self, dataPath : list, shuffle=True):
         super().__init__()
         self.shuffle = shuffle
         self.dataPath = dataPath
-        self.trainPercentage = trainPercentage
+        
+        print(f"\nCargando datos de entrenamiento...")
+        print(f"Archivos a cargar: {self.dataPath}")
 
-        self.problemData = None
-        self.orderQuantityData = None
-        self.returnsToGoData = None
-        print(f"dataPath: {self.dataPath}")
+        # Inicializar listas para almacenar todos los datos
+        allProblemData = []
+        allOrderQuantityData = []
+        allReturnsToGoData = []
+
+        #LO QUE TENIA ANTES
+        #self.problemData = None
+        #self.orderQuantityData = None
+        #self.returnsToGoData = None
 
         #Cargar los datos de los archivos
-        for i in range(len(self.dataPath)): 
-            element = torch.load(self.dataPath[i])
+        #for i in range(len(self.dataPath)): 
+        #    element = torch.load(self.dataPath[i])
             
-            #print(element["states"])
-            #batchSize = element["states"].batch_size[0]
-            #if hasattr(element["states"], "batch_dims"):
-            #    print("Dimensiones de batch:", element["states"].batch_dims)
-            #    print("Tamaño de batch:", element["states"].batch_size)
-    
-            print("Estructura de datos cargada:", element.keys())
+            #print("Estructura de datos cargada:", element.keys())
         
             # Acceder correctamente a los estados
-            states_dict = element["states"]
-            print("Estados disponibles:", states_dict.keys())
-        
-            batchSize = states_dict.batch_size[0]
-
-            #Calcular el porcentaje de datos de entrenamiento
-            percentage = 1 if trainPercentage is None else trainPercentage[i]
-            length = math.floor(batchSize * percentage) #element["problemData"].batch_size[0] * percentage cuando modifique el generate trajectories
+            #states_dict = element["states"]
+            #print("Estados disponibles:", states_dict.keys())
+            # Cargar y concatenar todos los datos
+        for i, path in enumerate(self.dataPath):
+            print(f"\nCargando archivo {i+1}/{len(self.dataPath)}: {path}")
+            element = torch.load(path)
             
-            #Si es el primer archivo, inicializar los datos
-            if i == 0:
-                #esto me da error porque el generate trajectories lo tengo hecho para un solo batch y los datos no tienen la dimension de batch
-                #self.problemData = element["states"][:length]
-                self.problemData = states_dict
-                #self.orderQuantityData = element["actions"][:length]
-                #self.returnsToGoData = element["returnsToGo"][:length]
-                self.orderQuantityData = element["actions"]
-                self.returnsToGoData = element["returnsToGo"]
-            else:
-                #Concatenar los datos de los archivos
-                #self.problemData = torch.cat((self.problemData, element["states"][:length]), dim=0)
-                #self.orderQuantityData = torch.cat((self.orderQuantityData, element["orderQuantity"][:length]), dim=0)
-                #self.returnsToGoData = torch.cat((self.returnsToGoData, element["returnsToGo"][:length]), dim=0)
+            # Añadir los datos a las listas
+            allProblemData.append(element["states"])
+            allOrderQuantityData.append(element["actions"])
+            allReturnsToGoData.append(element["returnsToGo"])
+            
+            print(f"Tamaño del archivo {i+1}:")
+            print(f"- Estados: {element['states'].batch_size}")
+            print(f"- Acciones: {element['actions'].shape}")
+            print(f"- Returns: {element['returnsToGo'].shape}")
 
-                self.problemData = torch.cat((self.problemData, states_dict), dim=0)
-                self.orderQuantityData = torch.cat([self.orderQuantityData, element["actions"]], dim=0)
-                self.returnsToGoData = torch.cat([self.returnsToGoData, element["returnsToGo"]], dim=0)
+        # Concatenar todos los datos
+        print("\nConcatenando todos los datos...")
+        self.problemData = torch.cat(allProblemData, dim=0)
+        self.orderQuantityData = torch.cat(allOrderQuantityData, dim=0)
+        self.returnsToGoData = torch.cat(allReturnsToGoData, dim=0)
 
+        print("\nDatos finales concatenados:")
+        print(f"Total de trayectorias: {self.problemData.batch_size[0]}")
+        print(f"Tamaño de problemData: {self.problemData.batch_size}")
+        print(f"Tamaño de orderQuantityData: {self.orderQuantityData.shape}")
+        print(f"Tamaño de returnsToGoData: {self.returnsToGoData.shape}")
 
+        # Inicializar índices y contador
         self.lengthData = self.problemData.batch_size[0]
         self.dataIndices = torch.arange(self.lengthData)
         self.currentIndex = 0
 
-        self.resetData()  
+        # Mezclar los datos si es necesario
+        self.resetData()
 
     def resetData(self):
         if self.shuffle:
@@ -83,11 +86,7 @@ class DTTrainingStrategy(TrainingStrategy):
 
     #Obtener los datos de entrenamiento
     def getTrainingData(self, batchSize):
-
-        #Augmentar los datos si es necesario
-        #if self.augment:
-        #    batchSize = batchSize // 8
-        
+ 
         #Calcular los índices de inicio y fin del batch
         startIndex = self.currentIndex
         endIndex = startIndex + batchSize
@@ -105,32 +104,9 @@ class DTTrainingStrategy(TrainingStrategy):
         if self.currentIndex >= self.lengthData:
             self.resetData()
 
-       
-        #Entrenar DT
-        #if self.augment:
-        #    instance = Instance(data=batch)
-        #    instance.augment()
-
-        #    batch = instance.currentData.clone()
-        #    orderQuantity = repeatBatchTensordict(TensorDict(
-        #        {
-        #            "orderQuantity": orderQuantity
-        #        }, batch_size=endIndex - startIndex), 8)
-        #    orderQuantity = orderQuantity["orderQuantity"]
-
-        #    returnsToGo = repeatBatchTensordict(TensorDict(
-        #        {
-        #            "returnsToGo": returnsToGo
-        #        }, batch_size=endIndex - startIndex), 8)
-        #    returnsToGo = returnsToGo["returnsToGo"]
-
-        #
-        #    instance = Instance(data=batch2)
-        #    instance.augment()
 
         return (batch.clone(), orderQuantity.clone(), returnsToGo.clone())
-
-
+    
     def getValidationData(self, batchSize):
         # Generar datos de validación usando las funciones existentes
         validationData = TensorDict({}, batch_size=[1])
@@ -151,9 +127,7 @@ class DTTrainingStrategy(TrainingStrategy):
         """Convierte la estrategia en un diccionario serializable"""
         return {
             'dataPath': self.dataPath,
-            'trainPercentage': self.trainPercentage,
             'shuffle': self.shuffle,
-            'augment': False  # No serializamos los datos cargados
         }
 
 

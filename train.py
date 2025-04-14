@@ -5,6 +5,7 @@ from trainer import TrainerConfig
 from decision_transformer_trainer import DecisionTransformerTrainer
 from decision_transformer_strategies import DTTrainingStrategy
 from pathlib import Path
+import torch
 
 def getProjectDirectory():
         return str(Path(__file__).resolve().parent)
@@ -38,7 +39,6 @@ if __name__ == "__main__":
 
     trainStrategy = DTTrainingStrategy(
         dataPath=[str(Path(getProjectDirectory()) / "data" / "training_data.pt")],
-        trainPercentage=[1]
     )
 
     trainerConfig = TrainerConfig(

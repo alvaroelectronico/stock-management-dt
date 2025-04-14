@@ -45,7 +45,6 @@ class TrainerConfig:
                 "strategy": "DTTrainingStrategy",
                 "strategyArgs": {
                     "dataPath": [getProjectDirectory() + "/data/training_data.pt"],
-                    "trainPercentage": [1],
                 }
             }
         self.nBatch = nBatch

@@ -81,9 +81,9 @@ class DecisionTransformer(nn.Module):
 
         #initialize some values of the new tensor dict
         tdNew["currentTimestep"] = torch.zeros((batchSize, 1), dtype=torch.long) #initially the current timestep is 0
-        tdNew["orderQuantity"] = torch.zeros((batchSize, 1), dtype=torch.int64)
+        tdNew["orderQuantity"] = torch.zeros((batchSize, 1), dtype=torch.float32)  # Cambiado a float32
         tdNew["onHandLevel"] = td["onHandLevel"]
-        tdNew["inTransitStock"] = torch.zeros(batchSize, leadTime-1, dtype=torch.int64) #initially the in transit stock is 0
+        tdNew["inTransitStock"] = torch.zeros(batchSize, leadTime-1, dtype=torch.float32)  # Cambiado a float32
         tdNew["forecast"] = td["forecast"]
         tdNew["orderingCost"] = td["orderingCost"]
         tdNew["stockOutPenalty"] = td["stockoutPenalty"]
@@ -259,8 +259,6 @@ class DecisionTransformer(nn.Module):
         print("Antes de actualizar:")
         print(f"Stock físico: {td['onHandLevel']}")
         print(f"Stock físico shape: {td['onHandLevel'].shape}")
-        print(f"Stock en tránsito: {td['inTransitStock'][...,0:1]}")
-        print(f"Stock en tránsito shape: {td['inTransitStock'][...,0:1].shape}")
         print(f"Forecast: {(td['forecast'][...,0:1]).shape}")
         print(f"Forecast: {td['forecast'][...,0:1]}")
     
@@ -292,7 +290,10 @@ class DecisionTransformer(nn.Module):
     
         currentTimeStep = td["currentTimestep"].long()
         print(f"Current timestep: {currentTimeStep}")
+        # Calcular el beneficio actual
         benefitUpdate = (income - holdingCost - stockOutPenalty - orderingCost).float()
+        # Asegurar que benefitUpdate tenga la forma [batch_size, 1]
+        benefitUpdate = benefitUpdate.unsqueeze(-1) if benefitUpdate.dim() == 1 else benefitUpdate
         print(f"Beneficio actualizado: {benefitUpdate}")
         print(f"Beneficio: {td['benefit']}")
         print(f"Beneficio shape: {td['benefit'].shape}")
@@ -312,7 +313,10 @@ class DecisionTransformer(nn.Module):
             # Hacer roll del beneficio
             td["benefit"] = torch.roll(td["benefit"], shifts=-1, dims=-1)
             # Actualizar el último valor con el beneficio nuevo
+            print(f"Beneficio actualizado: {benefitUpdate}")
+            print(f"Ultimo beneficio: {td['benefit'][..., -1]}")
             td["benefit"][..., -1] = benefitUpdate.squeeze()
+            print(f"Nuevo beneficio: {td['benefit'][..., -1]}")
             td["returnsToGo"] = torch.where(
                 mask,
                 (returnToGo*RETURN_TO_GO_WINDOW - benefitUpdate + 
@@ -360,10 +364,28 @@ class DecisionTransformer(nn.Module):
 
         currentTimestep = td["currentTimestep"].long()
         
+        # Asegurar que data tenga la forma correcta [batch_size, 1, embedding_dim]
+        if data.dim() == 2:
+            data = data.unsqueeze(1)
+        
+        # Asegurar que el tensor de tiempo tenga la forma correcta
+        time_embedding = self.projectTimeData(currentTimestep)
+        if time_embedding.dim() == 2:
+            time_embedding = time_embedding.unsqueeze(1)
+            
+        # Sumar data y time_embedding
+        new_data = data + time_embedding
+        
+        # Manejar el caso cuando el tensor está lleno
         if tensor.size(1) >= self.maxSeqLength:
-            result= torch.cat((tensor[:, 1:, :], data + self.projectTimeData(currentTimestep)), dim=1)
+            # Mantener solo los últimos maxSeqLength-1 elementos
+            tensor = tensor[:, -self.maxSeqLength+1:, :]
+            # Asegurar que new_data tenga la misma forma que tensor
+            new_data = new_data[:, :1, :]  # Tomar solo el primer elemento
+            result = torch.cat((tensor, new_data), dim=1)
         else:
-            result= torch.cat((tensor, data + self.projectTimeData(currentTimestep)), dim=1)
+            result = torch.cat((tensor, new_data), dim=1)
+            
         print(f"Result shape: {result.shape}")
         return result
     
@@ -379,7 +401,7 @@ if __name__ == "__main__":
     # Generar una trayectoria de ejemplo
     
     # 2. Crear TensorDict inicial
-    batch_size = 2  # Probamos con batch_size = 2
+    batch_size = 1  # Probamos con batch_size = 1
     td = TensorDict({
         'batch_size': torch.tensor([batch_size]),
         
