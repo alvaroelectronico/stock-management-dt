@@ -1,2 +1,4 @@
 venv/
 data/
+training_models/
+test_models/
