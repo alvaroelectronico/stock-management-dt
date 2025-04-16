@@ -103,7 +103,7 @@ class DecisionTransformer(nn.Module):
     def forward(self, td, nextOrderQuantity=None): 
 
         batchSize = td["statesEmbedding"].size(0)  
-        leadTime = td["leadTime"][0][0].item() #¿el lead time es el mismo para todos los batches?
+        leadTime = td["leadTime"][0][0].item() 
         print(f"Lead time: {leadTime}")
         print("\nEstado Inicial:")
         print(f"Timestep actual: {td['currentTimestep']}")
@@ -129,7 +129,6 @@ class DecisionTransformer(nn.Module):
         stockInTransitData = td["inTransitStock"].float().unsqueeze(-1)
 
         batch_size = td["forecast"].shape[0]
-        # project the scalar data, the demand and the stock in transit data
         print(f"Scalar data shape: {scalarData.shape}")
         scalarDataProjection = self.projectScalarData(scalarData)
         #demandDataProjection = self.projectDemandData(demandData.view(-1, 1)) #solo si pongo 1 arriba en la linear
@@ -216,7 +215,7 @@ class DecisionTransformer(nn.Module):
             output = output.reshape(batchSize, td["statesEmbedding"].size(1), 3, self.embeddingDim).permute(0, 2, 1, 3)
             output = output[:, 1, -1, :] #output = output[:, 2, -1, :]
             orderQuantity = self.outputProjection(output)  # [batchSize, 1]
-            orderQuantity = self.relu(orderQuantity)*100
+            #orderQuantity = self.relu(orderQuantity)
             predictedAction = orderQuantity
         
         else:
@@ -235,7 +234,7 @@ class DecisionTransformer(nn.Module):
             output = output.reshape(batchSize, td["statesEmbedding"].size(1), 3, self.embeddingDim).permute(0, 2, 1, 3)
             output = output[:, 1, -1, :] #output = output[:, 2, -1, :]
             predictedAction = self.outputProjection(output)  # [batchSize, 1]
-            predictedAction = self.relu(predictedAction)*100
+            #predictedAction = self.relu(predictedAction)
             orderQuantity = nextOrderQuantity
 
         if nextOrderQuantity is None:
@@ -261,7 +260,7 @@ class DecisionTransformer(nn.Module):
         print(f"Stock físico shape: {td['onHandLevel'].shape}")
         print(f"Forecast: {(td['forecast'][...,0:1]).shape}")
         print(f"Forecast: {td['forecast'][...,0:1]}")
-    
+
 
         td["onHandLevel"] = torch.add(td["onHandLevel"], td["inTransitStock"][...,0:1])
         print(f"Stock físico shape: {td['onHandLevel'].shape}")
@@ -333,7 +332,7 @@ class DecisionTransformer(nn.Module):
     
 
 
-         # Actualizar stock en tránsito
+        # Actualizar stock en tránsito
         # Desplazar el tensor una posición (representa el paso del tiempo)
         td["inTransitStock"] = torch.roll(td["inTransitStock"], shifts=-1, dims=-1)
         # La última posición se pone a cero ya que es nueva
@@ -353,7 +352,6 @@ class DecisionTransformer(nn.Module):
         print(f"Nuevo forecast: {td['forecast']}")
     
         print("\n=== Fin Forward Pass ===\n")
-
 
         return td
 
@@ -395,13 +393,9 @@ class DecisionTransformer(nn.Module):
 
 
 if __name__ == "__main__":
-    # 1. Crear datos de prueba
-    
     print("\n=== Generando datos de prueba ===")
-    # Generar una trayectoria de ejemplo
     
-    # 2. Crear TensorDict inicial
-    batch_size = 1  # Probamos con batch_size = 1
+    batch_size = 1
     td = TensorDict({
         'batch_size': torch.tensor([batch_size]),
         
@@ -420,15 +414,14 @@ if __name__ == "__main__":
         'returnsToGo':torch.tensor([[500]] * batch_size)
     })
     
-    # Añadir algunos pedidos en tránsito para prueba
     print(f"inTransitStock shape: {td['inTransitStock'].shape}")
-    td['inTransitStock'][0, 2] = 100   # Batch 0: pedido de 100 unidades que llega en t=5
-    td['inTransitStock'][1, 3] = 150  # Batch 1: pedido de 150 unidades que llega en t=10
+    td['inTransitStock'][0, 2] = 100
+    td['inTransitStock'][1, 3] = 150
     
     print("\n=== Valores iniciales ===")
     print(f"Batch size: {td['batch_size']}")
     print(f"\nParámetros del sistema:")
-    print(f"Holding Cost: {td['holdingCost']}")  
+    print(f"Holding Cost: {td['holdingCost']}")
     print(f"Ordering Cost: {td['orderingCost']}")
     print(f"Stockout Penalty: {td['stockoutPenalty']}")
     print(f"Unit Revenue: {td['unitRevenue']}")
@@ -441,14 +434,12 @@ if __name__ == "__main__":
     
    
     
-    # 3. Crear modelo y ejecutar initModel
     print("\n=== Inicializando modelo ===")
     config = DecisionTransformerConfig()
-    model = DecisionTransformer(config)  # Ajusta los parámetros según tu configuración
+    model = DecisionTransformer(config)
     model.eval()
     tdNew = model.initModel(td)
     
-    # 4. Imprimir resultados
     print("\n=== Verificando inicialización ===")
     print(f"Batch size: {tdNew['batch_size']}")
     
@@ -471,8 +462,6 @@ if __name__ == "__main__":
     print(f"unitRevenue: {tdNew['unitRevenue']}")
     print(f"leadTime: {tdNew['leadTime']}")
     
-        
-    # 6. Verificar que los tensores están correctamente inicializados
     print("\n=== Verificando valores ===")
     print("Todos los tensores deberían ser cero:")
     print(f"currentTimestep sum: {tdNew['currentTimestep'].sum()}")
@@ -484,14 +473,10 @@ if __name__ == "__main__":
     print(f"actionsEmbedding size[1]: {tdNew['actionsEmbedding'].size(1)}")
     print(f"returnsToGoEmbedding size[1]: {tdNew['returnsToGoEmbedding'].size(1)}")
 
-
     print("\n=== Iniciando Forward Pass ===")
-    # 3. Ejecutar el forward
-    for step in range(5):  # Por ejemplo, 5 pasos de tiempo
+    for step in range(5):
         print(f"\nPaso {step}")
-        tdNew = model.forward(tdNew)  # Aquí empieza el forward
-        
-        # Opcional: hacer una pausa entre pasos para mejor visualización
+        tdNew = model.forward(tdNew)
         input("Presiona Enter para continuar al siguiente paso...")
 
 
