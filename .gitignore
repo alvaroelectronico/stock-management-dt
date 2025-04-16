@@ -3,3 +3,5 @@ data/
 training_models/
 test_models/
 __pycache__/
+logger/logger/logs/
+logger/__pycache__
