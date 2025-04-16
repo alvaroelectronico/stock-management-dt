@@ -2,3 +2,4 @@ venv/
 data/
 training_models/
 test_models/
+__pycache__/
