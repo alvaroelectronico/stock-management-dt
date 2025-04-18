@@ -46,7 +46,7 @@ class DTTrainingStrategy(TrainingStrategy):
             # Cargar y concatenar todos los datos
         for i, path in enumerate(self.dataPath):
             print(f"\nCargando archivo {i+1}/{len(self.dataPath)}: {path}")
-            element = torch.load(path)
+            element = torch.load(path, weights_only=False)
             
             # Añadir los datos a las listas
             allProblemData.append(element["states"])

@@ -1,0 +1,19 @@
+# Deep Learning Framework
+torch>=2.0.0
+transformers>=4.30.0
+
+# Scientific Computing
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Data Management
+tensordict>=0.1.0
+pathlib>=1.0.1
+
+# Development Tools
+pytest>=7.3.1
+black>=23.3.0
+flake8>=6.0.0
+
+# Optional CUDA Support (if using GPU)
+triton>=2.0.0; platform_system == "Linux" and platform_machine == "x86_64"
