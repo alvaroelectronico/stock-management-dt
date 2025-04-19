@@ -28,8 +28,8 @@ MAX_DEMAND_MEAN = 20
 MIN_DEMAND_STD = 1
 MAX_DEMAND_STD = 2
 
-TRAYECTORY_LENGHT = 10 #era 50
-FORECAST_LENGHT = 10 #era 10
+TRAJECTORY_LENGTH = 12 #era 50
+FORECAST_LENGTH = 10 #era 10
 
 RETURN_TO_GO_WINDOW = 10 #TODO: Change this to a consisten value
 DEMAND_FORECAST_WINDOW = 10
@@ -57,7 +57,7 @@ def generateInstanceData():
     print(inputData)
     return inputData
 
-def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
+def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
     print("\n=== Iniciando generación de trayectoria ===")
 
     # Extracting input data
@@ -101,7 +101,7 @@ def generateTrajectory(inputData, trajectoryLength=TRAYECTORY_LENGHT):
     for t in range(trajectoryLength):
         #generate demand and forecast for the current period
         currentDemand = np.random.normal(demand_mean, demand_std)
-        currentForecast = np.random.normal(demand_mean, demand_std, size=FORECAST_LENGHT)
+        currentForecast = np.random.normal(demand_mean, demand_std, size=FORECAST_LENGTH)
         
         print(f"\n--- Período {t} ---")
         print(f"Current demand: {currentDemand}, Current forecast: {currentForecast}")
@@ -253,11 +253,12 @@ if __name__ == "__main__":
     print("Tamaño de states:", trainingData['states'])
     print("\nPrimera trayectoria completa:")
     trayectoria_idx = 0  # Cambiar para ver otras trayectorias
-    for timestep in range(TRAYECTORY_LENGHT):
+    for timestep in range(TRAJECTORY_LENGTH):
         print(f"\nTimestep {timestep}:")
         for key in trainingData['states'].keys():
             print(f"{key}: {trainingData['states'][key][trayectoria_idx][timestep]}")
         print(f"Action: {trainingData['actions'][trayectoria_idx][timestep]}")
         print(f"Return to go: {trainingData['returnsToGo'][trayectoria_idx][timestep]}")
 
+    print(trainingData)
 

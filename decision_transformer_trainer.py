@@ -7,7 +7,7 @@ from decision_transformer_config import DecisionTransformerConfig
 from decision_transformer_strategies import DTTrainingStrategy
 import decision_transformer_strategies
 import numpy as np
-from generate_tajectories import TRAYECTORY_LENGHT
+from generate_tajectories import TRAJECTORY_LENGTH
 import copy
 from tensordict import TensorDict
 import os

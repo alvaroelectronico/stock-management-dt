@@ -55,7 +55,13 @@ class TrainerConfig:
         self.lr_scheduler = lr_scheduler
     
     def to_dict(self):
-       return self.__dict__
+       dict = {
+        "nBatch": self.nBatch,
+        "nVal": self.nVal,
+        "stepsPerEpoch": self.stepsPerEpoch,
+        "trainStrategy": self.trainStrategy,
+       }
+       return dict
 
 class Trainer:
 
