@@ -214,11 +214,16 @@ class DecisionTransformerTrainer(Trainer):
                 # Convertir los datos a la GPU si está disponible
                 orderQuantityData = orderQuantityData.to(self.device)
                 returnsToGoData = returnsToGoData.to(self.device)
-                td = problemData.to(self.device)
+                td = {k: v.to(self.device) for k, v in problemData.items()}
+                #td = problemData.to(self.device)
                 
                 # Inicializar el modelo
                 self.model.setInitalReturnToGo(td, returnsToGoData)
                 td = self.model.initModel(td)
+
+                for key in ["returnsToGoEmbedding", "statesEmbedding", "actionsEmbedding"]:
+                    if td[key].shape[1] > 1:
+                        td[key] = td[key][:, -1:, :]
                 
                 # Forward pass
                 predictedAction = self.model(td)["orderQuantity"]

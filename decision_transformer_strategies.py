@@ -109,6 +109,7 @@ class DTTrainingStrategy(TrainingStrategy):
     
     def getValidationData(self, batchSize):
         # Generar datos de validación usando las funciones existentes
+        
         validationData = TensorDict({}, batch_size=[1])
         
         # Generar una trayectoria de validación

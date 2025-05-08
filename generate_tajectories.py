@@ -28,7 +28,7 @@ MAX_DEMAND_MEAN = 20
 MIN_DEMAND_STD = 1
 MAX_DEMAND_STD = 2
 
-TRAJECTORY_LENGTH = 12 #era 50
+TRAJECTORY_LENGTH = 50 #era 50
 FORECAST_LENGTH = 10 #era 10
 
 RETURN_TO_GO_WINDOW = 10 #TODO: Change this to a consisten value
@@ -44,14 +44,14 @@ def generateInstanceData():
     holdingCost = np.random.randint(MIN_HOLDING_COST, MAX_HOLDING_COST)
     onHandLevel = 0 # TODO: Change this to a consisten value
     orderingCost = np.random.randint(MIN_ORDERING_COST, MAX_ORDERING_COST)  
-    stockoutPenalty = np.random.randint(MIN_STOCKOUT_PENALTY, MAX_STOCKOUT_PENALTY)  
+    stockOutPenalty = np.random.randint(MIN_STOCKOUT_PENALTY, MAX_STOCKOUT_PENALTY)  
     unitRevenue = np.random.randint(MIN_UNIT_REVENUE, MAX_UNIT_REVENUE)  
     
     inputData = {'leadtime': leadTime, 
                  'holdingCost': holdingCost, 
                  'onHandLevel': onHandLevel,
                  'orderingCost': orderingCost, 
-                 'stockoutPenalty': stockoutPenalty, 
+                 'stockOutPenalty': stockOutPenalty, 
                  'unitRevenue': unitRevenue, 
                  'inTransitStock': np.zeros(leadTime-1)} #  list with the pending orders 
     print(inputData)
@@ -66,13 +66,13 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
     onHandLevel = inputData['onHandLevel']
     inTransitStock = inputData['inTransitStock'] 
     orderingCost = inputData['orderingCost'] 
-    stockoutPenalty = inputData['stockoutPenalty'] 
+    stockOutPenalty = inputData['stockOutPenalty'] 
     unitRevenue = inputData['unitRevenue'] 
 
     # Defining system variables
     totalHoldingCost = 0
     totalOrderingCost = 0
-    totalStockoutCost = 0
+    totalStockOutCost = 0
     totalIncome = 0
     totalBenefit = np.zeros(trajectoryLength)
     orderQuantity = 0
@@ -124,19 +124,19 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
             'demand': currentDemand,
             'orderingCost': orderingCost,  # Fixed cost when placing an order, regardless of the amount ordered
             'holdingCost': holdingCost,
-            'stockoutPenalty':  stockoutPenalty,
+            'stockOutPenalty':  stockOutPenalty,
             'unitRevenue': unitRevenue,
             'leadTime':  leadTime,
             'timesStep': t  # Add the current time step
         }
             
 
-        #Update the stock on hand and calculate the stockout cost and the income
-        totalStockoutCost += stockoutPenalty *max(0, currentDemand - onHandLevel) 
+        #Update the stock on hand and calculate the stockOut cost and the income
+        totalStockOutCost += stockOutPenalty *max(0, currentDemand - onHandLevel) 
         totalIncome += unitRevenue * min(currentDemand, onHandLevel) 
         onHandLevel = max(0, onHandLevel - currentDemand )
         print(f"Stock actual: {onHandLevel:.2f}")
-        print(f"Stockout cost: {totalStockoutCost:.2f}")
+        print(f"StockOut cost: {totalStockOutCost:.2f}")
         print(f"Income: {totalIncome:.2f}")
         
         #Calculate the total stock, which is the physical stock plus the stock in transit.
@@ -158,7 +158,7 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
         #Calculate the holding cost and the benefit
         totalHoldingCost += holdingCost * onHandLevel
         print(f"Holding cost: {totalHoldingCost:.2f}")
-        totalBenefit[t]=totalIncome - totalHoldingCost - totalStockoutCost - totalOrderingCost 
+        totalBenefit[t]=totalIncome - totalHoldingCost - totalStockOutCost - totalOrderingCost 
         print(f"Benefit: {totalBenefit[t]:.2f}")
     
          #Add the trajectory
@@ -169,7 +169,7 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
         
         #Calculate the reward
 
-    reward = (totalIncome - totalHoldingCost - totalStockoutCost - totalOrderingCost)/trajectoryLength 
+    reward = (totalIncome - totalHoldingCost - totalStockOutCost - totalOrderingCost)/trajectoryLength 
     print(f"Reward: {reward:.2f}")
     
     #Hacerlo fuera
@@ -208,7 +208,7 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
             'leadTime': torch.stack([torch.tensor(t['state']['leadTime'], dtype=torch.float) for t in trajectory]),
             'holdingCost': torch.stack([torch.tensor(t['state']['holdingCost'], dtype=torch.float) for t in trajectory]),
             'orderingCost': torch.stack([torch.tensor(t['state']['orderingCost'], dtype=torch.float) for t in trajectory]),
-            'stockoutPenalty': torch.stack([torch.tensor(t['state']['stockoutPenalty'], dtype=torch.float) for t in trajectory]),
+            'stockOutPenalty': torch.stack([torch.tensor(t['state']['stockOutPenalty'], dtype=torch.float) for t in trajectory]),
             'unitRevenue': torch.stack([torch.tensor(t['state']['unitRevenue'], dtype=torch.float) for t in trajectory]),
             'timesStep': torch.stack([torch.tensor(t['state']['timesStep'], dtype=torch.float) for t in trajectory]),
         }).unsqueeze(0),
@@ -222,7 +222,7 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
 
 
 if __name__ == "__main__":
-    noTrajectories = 2 #era 100
+    noTrajectories = 5 #era 100
     # Inicializar trainingData como None
     trainingData = TensorDict({}, batch_size=[1])
     

@@ -65,7 +65,11 @@ class DecisionTransformer(nn.Module):
 
         # project the embedding to a scalar value and apply a ReLU activation function to avoid negative values
         self.outputProjection = nn.Linear(self.embeddingDim, 1)  
-        self.relu = nn.ReLU()
+        self.softplus = nn.Softplus()
+        #self.relu = nn.ReLU()
+        #CAMBIAR ESTA RELU A LA QUE MULTIPLICA POR LA PENDIENTE
+        #PROBAR TAMBIEN CON SOFTPLUS NN.SOFTPLUS
+    
 
         self.transformer = DecisionTransformerGPT2Model(decisionTransformerConfig)
 
@@ -77,7 +81,10 @@ class DecisionTransformer(nn.Module):
         leadTime = int(td["leadTime"][0][0])
         print(f"Lead time: {leadTime}")
         device = getTorchDevice()
-        tdNew = td.clone() #clone the tensor dict to avoid modifying the original one
+        if hasattr(td, 'clone'):
+            tdNew = td.clone()
+        else:
+            tdNew = {k: v.clone() for k, v in td.items()}
 
         #initialize some values of the new tensor dict
         tdNew["currentTimestep"] = torch.zeros((batchSize, 1), dtype=torch.long) #initially the current timestep is 0
@@ -86,7 +93,7 @@ class DecisionTransformer(nn.Module):
         tdNew["inTransitStock"] = torch.zeros(batchSize, leadTime-1, dtype=torch.float32)  # Cambiado a float32
         tdNew["forecast"] = td["forecast"]
         tdNew["orderingCost"] = td["orderingCost"]
-        tdNew["stockOutPenalty"] = td["stockoutPenalty"]
+        tdNew["stockOutPenalty"] = td["stockOutPenalty"]
         tdNew["unitRevenue"] = td["unitRevenue"]
         tdNew["leadTime"] = td["leadTime"]
         tdNew["benefit"] = torch.zeros(batchSize, RETURN_TO_GO_WINDOW, dtype=torch.float32)
@@ -156,7 +163,7 @@ class DecisionTransformer(nn.Module):
         # project the time data
         timeIndicesDemand = torch.arange(TRAJECTORY_LENGTH, device=td["forecast"].device).long() #no estoy segura de si es así
         timeIndicesStockInTransit = torch.arange(leadTime-1, device=td["inTransitStock"].device).long() #considerando que todos los elementos del batch tienen el mismo lead time
-        
+    
         timeDataProjectionDemand = self.projectTimeData(timeIndicesDemand) 
         timeDataProjectionStockInTransit = self.projectTimeData(timeIndicesStockInTransit) 
 
@@ -216,7 +223,7 @@ class DecisionTransformer(nn.Module):
             output = output.reshape(batchSize, td["statesEmbedding"].size(1), 3, self.embeddingDim).permute(0, 2, 1, 3)
             output = output[:, 1, -1, :] #output = output[:, 2, -1, :]
             orderQuantity = self.outputProjection(output)  # [batchSize, 1]
-            #orderQuantity = self.relu(orderQuantity)
+            orderQuantity = self.softplus(orderQuantity)
             predictedAction = orderQuantity
         
         else:
@@ -235,7 +242,7 @@ class DecisionTransformer(nn.Module):
             output = output.reshape(batchSize, td["statesEmbedding"].size(1), 3, self.embeddingDim).permute(0, 2, 1, 3)
             output = output[:, 1, -1, :] #output = output[:, 2, -1, :]
             predictedAction = self.outputProjection(output)  # [batchSize, 1]
-            #predictedAction = self.relu(predictedAction)*100
+            predictedAction = self.softplus(predictedAction)
             orderQuantity = nextOrderQuantity
 
         if nextOrderQuantity is None:
@@ -325,8 +332,9 @@ class DecisionTransformer(nn.Module):
                 returnToGo)
         else:
             # Si aún no llegamos a RETURN_TO_GO_WINDOW, actualizar normalmente
-            for b in range(td["benefit"].size(0)):
-                td["benefit"][b, currentTimeStep[b, 0]] = benefitUpdate[b, 0]
+            td["benefit"][...,currentTimeStep] = benefitUpdate
+            #for b in range(td["benefit"].size(0)):
+                #td["benefit"][b, currentTimeStep[b, 0]] = benefitUpdate[b, 0]
 
 
         print(f"Beneficio: {td['benefit']}")
@@ -415,7 +423,7 @@ if __name__ == "__main__":
         'forecast': torch.normal(mean=demand_mean, std=demand_std, size=(batch_size, FORECAST_LENGTH)),  # Previsión de demanda
         'holdingCost': torch.tensor([[5.0]]),  # Coste de almacenamiento
         'orderingCost': torch.tensor([[100.0]]),  # Coste de pedido
-        'stockoutPenalty': torch.tensor([[50.0]]),  # Penalización por rotura
+        'stockOutPenalty': torch.tensor([[50.0]]),  # Penalización por rotura
         'unitRevenue': torch.tensor([[20.0]]),  # Ingreso unitario
         'timesStep': torch.tensor([[0]]),  # Paso de tiempo inicial
         
@@ -454,4 +462,8 @@ if __name__ == "__main__":
         input("Presiona Enter para continuar al siguiente paso...")
 
 
-
+#long contexto
+#ventana de contexto indices de tiempo
+#CAMBIAR RELU A LA QUE MULTIPLICA POR LA PENDIENTE HECHO
+#BUCLE ACTUALIZACION DE RETURNS TO GO HECHO
+#AUMENTAR EL BATCH SIZE HECHO 

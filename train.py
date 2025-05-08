@@ -42,7 +42,7 @@ if __name__ == "__main__":
     )
 
     trainerConfig = TrainerConfig(
-        nBatch=1,
+        nBatch=4,
         nVal=10, #400,
         stepsPerEpoch=stepsPerEpoch,
         trainStrategy=trainStrategy,
