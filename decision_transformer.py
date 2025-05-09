@@ -31,7 +31,7 @@ class DecisionTransformer(nn.Module):
         self.decisionTransformerConfig = decisionTransformerConfig
         self.embeddingDim = decisionTransformerConfig.hidden_size
 
-        self.maxSeqLength = 15
+        self.maxSeqLength = 50
 
 
 
@@ -371,29 +371,46 @@ class DecisionTransformer(nn.Module):
         print(f"Tensor original shape: {tensor.shape}")
         print(f"Data to add shape: {data.shape}")
 
-        currentTimestep = td["currentTimestep"].long()
+        #currentTimestep = td["currentTimestep"].long()
         
         # Asegurar que data tenga la forma correcta [batch_size, 1, embedding_dim]
         if data.dim() == 2:
             data = data.unsqueeze(1)
         
         # Asegurar que el tensor de tiempo tenga la forma correcta
-        time_embedding = self.projectTimeData(currentTimestep)
-        if time_embedding.dim() == 2:
-            time_embedding = time_embedding.unsqueeze(1)
+        #time_embedding = self.projectTimeData(currentTimestep)
+        #if time_embedding.dim() == 2:
+        #    time_embedding = time_embedding.unsqueeze(1)
             
         # Sumar data y time_embedding
-        new_data = data + time_embedding
+        #new_data = data + time_embedding
+        if tensor.size(1) > 0:
+            old_positions = torch.arange(tensor.size(1), device=self.device)
+            old_time_embeddings = self.projectTimeData(old_positions)
+            old_time_embeddings = old_time_embeddings.unsqueeze(0).expand(tensor.size(0), -1, -1)
+            tensor = tensor - old_time_embeddings
         
         # Manejar el caso cuando el tensor está lleno
         if tensor.size(1) >= self.maxSeqLength:
             # Mantener solo los últimos maxSeqLength-1 elementos
             tensor = tensor[:, -self.maxSeqLength+1:, :]
             # Asegurar que new_data tenga la misma forma que tensor
-            new_data = new_data[:, :1, :]  # Tomar solo el primer elemento
-            result = torch.cat((tensor, new_data), dim=1)
+            data = data[:, :1, :]  # Tomar solo el primer elemento
+            result = torch.cat((tensor, data), dim=1)
+            
         else:
-            result = torch.cat((tensor, new_data), dim=1)
+            result = torch.cat((tensor, data), dim=1)
+        
+        # Crear un tensor con las posiciones relativas para cada elemento
+        new_positions = torch.arange(result.size(1), device=self.device)
+        # Aplicar el embedding temporal a cada posición
+        new_time_embeddings = self.projectTimeData(new_positions)
+        # Expandir las dimensiones para que coincidan con el batch
+        new_time_embeddings = new_time_embeddings.unsqueeze(0).expand(result.size(0), -1, -1)
+        
+        # Sumar los embeddings temporales a los datos
+        result = result + new_time_embeddings
+            
             
         print(f"Result shape: {result.shape}")
         return result
