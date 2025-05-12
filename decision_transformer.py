@@ -233,11 +233,8 @@ class DecisionTransformer(nn.Module):
             output = output.reshape(batchSize, statesEmbedding.size(1), 3, self.embeddingDim).permute(0, 2, 1, 3)
             output = output[:, 1, -1, :] #output = output[:, 2, -1, :]
             orderQuantity = self.outputProjection(output)  # [batchSize, 1]
-<<<<<<< HEAD
             orderQuantity = self.softplus(orderQuantity)
-=======
             #orderQuantity = self.relu(orderQuantity)
->>>>>>> b61f1f5ae849d84838cf6e7e8f0257846f6835c7
             predictedAction = orderQuantity
         
         else:
@@ -256,11 +253,8 @@ class DecisionTransformer(nn.Module):
             output = output.reshape(batchSize, statesEmbedding.size(1), 3, self.embeddingDim).permute(0, 2, 1, 3)
             output = output[:, 1, -1, :] #output = output[:, 2, -1, :]
             predictedAction = self.outputProjection(output)  # [batchSize, 1]
-<<<<<<< HEAD
             predictedAction = self.softplus(predictedAction)
-=======
             #predictedAction = self.relu(predictedAction)
->>>>>>> b61f1f5ae849d84838cf6e7e8f0257846f6835c7
             orderQuantity = nextOrderQuantity
 
         if nextOrderQuantity is None:
@@ -419,7 +413,6 @@ class DecisionTransformer(nn.Module):
 
 
 if __name__ == "__main__":
-<<<<<<< HEAD
     # 1. Crear datos de prueba
     print("\n=== Generando datos de prueba ===")
     
@@ -428,11 +421,9 @@ if __name__ == "__main__":
     trajectory_length = TRAJECTORY_LENGTH  # Usar la constante definida
     
     # Crear el TensorDict con la estructura correcta
-=======
     print("\n=== Generando datos de prueba ===")
     
     batch_size = 1
->>>>>>> b61f1f5ae849d84838cf6e7e8f0257846f6835c7
     td = TensorDict({
         'batch_size': torch.tensor([batch_size]),
         'leadTime': torch.tensor([[15]]),
@@ -448,7 +439,6 @@ if __name__ == "__main__":
         'unitRevenue': torch.tensor([[20.0]]),  # Ingreso unitario
         'timesStep': torch.tensor([[0]]),  # Paso de tiempo inicial
         
-<<<<<<< HEAD
         
         # Acciones y returns
         'actions': torch.zeros(batch_size, trajectory_length),  # Acciones iniciales
@@ -458,13 +448,12 @@ if __name__ == "__main__":
     print("\n=== Valores iniciales ===")
     print(f"Batch size: {td['batch_size']}")
     print(f"Trajectory length: {trajectory_length}")
-=======
-        # Estado inicial del sistema
-        'onHandLevel': torch.tensor([[100], [150]]),               # Stock inicial diferente para cada batch
-        'inTransitStock': torch.zeros(batch_size, 4),  # Sin pedidos en tránsito inicialmente
-        'forecast': torch.tensor([[20.0, 22.0, 18.0, 25.0, 21.0]] * batch_size),  # Previsión de demanda para 5 períodos
-        'returnsToGo':torch.tensor([[500]] * batch_size)
-    })
+    # Estado inicial del sistema
+    #'onHandLevel': torch.tensor([[100], [150]]),               # Stock inicial diferente para cada batch
+    #'inTransitStock': torch.zeros(batch_size, 4),  # Sin pedidos en tránsito inicialmente
+    #'forecast': torch.tensor([[20.0, 22.0, 18.0, 25.0, 21.0]] * batch_size),  # Previsión de demanda para 5 períodos
+    #'returnsToGo':torch.tensor([[500]] * batch_size)
+    #})
     
     print(f"inTransitStock shape: {td['inTransitStock'].shape}")
     td['inTransitStock'][0, 2] = 100
@@ -479,7 +468,6 @@ if __name__ == "__main__":
     print(f"Unit Revenue: {td['unitRevenue']}")
     print(f"Lead Time: {td['leadTime']}")
     print(f"returnsToGo: {td['returnsToGo']}")
->>>>>>> b61f1f5ae849d84838cf6e7e8f0257846f6835c7
     
     print("\n--- Estados iniciales ---")
     #for key, value in td['states'].items():
@@ -495,7 +483,6 @@ if __name__ == "__main__":
     model.eval()
     tdNew = model.initModel(td)
     
-<<<<<<< HEAD
     # 4. Ejecutar el forward pass
     print("\n=== Iniciando Forward Pass ===")
     for step in range(trajectory_length):
@@ -503,7 +490,6 @@ if __name__ == "__main__":
         tdNew = model.forward(tdNew)
         
         # Opcional: hacer una pausa entre pasos
-=======
     print("\n=== Verificando inicialización ===")
     print(f"Batch size: {tdNew['batch_size']}")
     
@@ -541,7 +527,6 @@ if __name__ == "__main__":
     for step in range(5):
         print(f"\nPaso {step}")
         tdNew = model.forward(tdNew)
->>>>>>> b61f1f5ae849d84838cf6e7e8f0257846f6835c7
         input("Presiona Enter para continuar al siguiente paso...")
 
 
