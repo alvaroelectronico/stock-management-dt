@@ -31,7 +31,7 @@ class DecisionTransformer(nn.Module):
         self.decisionTransformerConfig = decisionTransformerConfig
         self.embeddingDim = decisionTransformerConfig.hidden_size
 
-        self.maxSeqLength = 50
+        self.maxSeqLength = TRAJECTORY_LENGTH #provisionalmente es el mismo que el de la secuencia de datos
 
 
 
@@ -129,6 +129,7 @@ class DecisionTransformer(nn.Module):
             td["unitRevenue"].unsqueeze(-1),
             td["leadTime"].unsqueeze(-1)
             ], dim=-1)
+        print(f"Scalar data shape: {scalarData.shape}")
         
         print(f"\nScalar data: {scalarData}")
 
@@ -185,10 +186,7 @@ class DecisionTransformer(nn.Module):
             key=demandStockTimeEmbedding,
             value=demandStockTimeEmbedding 
             )
-        print("\nDespués de MHA:")
-        print(f"States embedding shape: {td['statesEmbedding'].shape}")
-        print(f"Actions embedding shape: {td['actionsEmbedding'].shape}")
-        print(f"Returns-to-go embedding shape: {td['returnsToGoEmbedding'].shape}")
+        print(f"MHA output shape: {mhaState.shape}")
     
 
         td["statesEmbedding"] = self.addSequenceData(td, td["statesEmbedding"], mhaState)
@@ -201,6 +199,19 @@ class DecisionTransformer(nn.Module):
         td["returnsToGoEmbedding"] = self.addSequenceData(td, td["returnsToGoEmbedding"],
                                                           embeddingsReturnsToGo)
         
+        statesEmbedding = td["statesEmbedding"]
+        returnsToGoEmbedding = td["returnsToGoEmbedding"]
+        actionsEmbedding = td["actionsEmbedding"]
+
+        # Calcular embeddings posicionales locales para este timestep
+        positions = torch.arange(statesEmbedding.size(1), device=self.device)
+        positionsEmbeddings = self.projectTimeData(positions)
+        positionsEmbeddings = positionsEmbeddings.unsqueeze(0).expand(statesEmbedding.size(0), -1, -1)
+
+        # Aplicar embeddings posicionales localmente
+        statesEmbedding = statesEmbedding + positionsEmbeddings
+        returnsToGoEmbedding = returnsToGoEmbedding + positionsEmbeddings
+        
         print(f"\nDimensiones en forward:")
         print(f"returnsToGo shape: {returnsToGo.shape}")
         print(f"embeddingsReturnsToGo shape: {embeddingsReturnsToGo.shape}")
@@ -209,18 +220,18 @@ class DecisionTransformer(nn.Module):
         # stack the returns to go embedding, the states embedding and the actions embedding
         if not self.training:
             stackedInputs = (
-                torch.stack((td["returnsToGoEmbedding"], td["statesEmbedding"],
-                             torch.cat((td["actionsEmbedding"],
-                                        torch.zeros(batchSize, td["statesEmbedding"].size(1) - td["actionsEmbedding"].size(1), self.embeddingDim, device=self.device)), dim=1)),
+                torch.stack((returnsToGoEmbedding, statesEmbedding,
+                             torch.cat((actionsEmbedding,
+                                        torch.zeros(batchSize, statesEmbedding.size(1) - actionsEmbedding.size(1), self.embeddingDim, device=self.device)), dim=1)),
                             dim=1)
                 .permute(0, 2, 1, 3)
-                .reshape(batchSize, 3 * td["statesEmbedding"].size(1), self.embeddingDim)
+                .reshape(batchSize, 3 * statesEmbedding.size(1), self.embeddingDim)
             )
         
             #apply the transformer to the stacked inputs
             output = self.transformer(inputs_embeds=stackedInputs) 
             output = output["last_hidden_state"]
-            output = output.reshape(batchSize, td["statesEmbedding"].size(1), 3, self.embeddingDim).permute(0, 2, 1, 3)
+            output = output.reshape(batchSize, statesEmbedding.size(1), 3, self.embeddingDim).permute(0, 2, 1, 3)
             output = output[:, 1, -1, :] #output = output[:, 2, -1, :]
             orderQuantity = self.outputProjection(output)  # [batchSize, 1]
             orderQuantity = self.softplus(orderQuantity)
@@ -228,18 +239,18 @@ class DecisionTransformer(nn.Module):
         
         else:
             stackedInputs = (
-                torch.stack((td["returnsToGoEmbedding"], td["statesEmbedding"],
-                             torch.cat((td["actionsEmbedding"],
-                                        torch.zeros(batchSize, td["statesEmbedding"].size(1) - td["actionsEmbedding"].size(1), self.embeddingDim, device=self.device)), dim=1)),
+                torch.stack((returnsToGoEmbedding, statesEmbedding,
+                             torch.cat((actionsEmbedding,
+                                        torch.zeros(batchSize, statesEmbedding.size(1) - actionsEmbedding.size(1), self.embeddingDim, device=self.device)), dim=1)),
                             dim=1)
                 .permute(0, 2, 1, 3)
-                .reshape(batchSize, 3 * td["statesEmbedding"].size(1), self.embeddingDim)
+                .reshape(batchSize, 3 * statesEmbedding.size(1), self.embeddingDim)
             )
         
             #apply the transformer to the stacked inputs
             output = self.transformer(inputs_embeds=stackedInputs) 
             output = output["last_hidden_state"]
-            output = output.reshape(batchSize, td["statesEmbedding"].size(1), 3, self.embeddingDim).permute(0, 2, 1, 3)
+            output = output.reshape(batchSize, statesEmbedding.size(1), 3, self.embeddingDim).permute(0, 2, 1, 3)
             output = output[:, 1, -1, :] #output = output[:, 2, -1, :]
             predictedAction = self.outputProjection(output)  # [batchSize, 1]
             predictedAction = self.softplus(predictedAction)
@@ -256,8 +267,16 @@ class DecisionTransformer(nn.Module):
     
 
         # project the order quantity to an embedding and add it to the actions embedding
-        actionEmbedding = self.embeddingAction(orderQuantity).unsqueeze(1)  # Necesitas añadir esta capa en __init__
+        actionEmbedding = self.embeddingAction(orderQuantity).unsqueeze(1)
         td["actionsEmbedding"] = self.addSequenceData(td, td["actionsEmbedding"], actionEmbedding)
+        # Actualizar actionsEmbedding con el nuevo valor
+        actionsEmbedding = td["actionsEmbedding"]
+        # Recalcular embeddings posicionales para acciones
+        actionPositions = torch.arange(actionsEmbedding.size(1), device=self.device)
+        actionPositionsEmbeddings = self.projectTimeData(actionPositions)
+        actionPositionsEmbeddings = actionPositionsEmbeddings.unsqueeze(0).expand(actionsEmbedding.size(0), -1, -1)
+        # Aplicar embeddings posicionales actualizados
+        actionsEmbedding = actionsEmbedding + actionPositionsEmbeddings
         print(f"Actions embedding shape: {td['actionsEmbedding'].shape}")
 
         #Actualizar todos los datos
@@ -370,47 +389,20 @@ class DecisionTransformer(nn.Module):
         print(f"\nDebug addSequenceData:")
         print(f"Tensor original shape: {tensor.shape}")
         print(f"Data to add shape: {data.shape}")
-
-        #currentTimestep = td["currentTimestep"].long()
         
         # Asegurar que data tenga la forma correcta [batch_size, 1, embedding_dim]
         if data.dim() == 2:
             data = data.unsqueeze(1)
         
-        # Asegurar que el tensor de tiempo tenga la forma correcta
-        #time_embedding = self.projectTimeData(currentTimestep)
-        #if time_embedding.dim() == 2:
-        #    time_embedding = time_embedding.unsqueeze(1)
-            
-        # Sumar data y time_embedding
-        #new_data = data + time_embedding
-        if tensor.size(1) > 0:
-            old_positions = torch.arange(tensor.size(1), device=self.device)
-            old_time_embeddings = self.projectTimeData(old_positions)
-            old_time_embeddings = old_time_embeddings.unsqueeze(0).expand(tensor.size(0), -1, -1)
-            tensor = tensor - old_time_embeddings
-        
         # Manejar el caso cuando el tensor está lleno
         if tensor.size(1) >= self.maxSeqLength:
             # Mantener solo los últimos maxSeqLength-1 elementos
             tensor = tensor[:, -self.maxSeqLength+1:, :]
-            # Asegurar que new_data tenga la misma forma que tensor
+            # Asegurar que data tenga la misma forma que tensor
             data = data[:, :1, :]  # Tomar solo el primer elemento
             result = torch.cat((tensor, data), dim=1)
-            
         else:
             result = torch.cat((tensor, data), dim=1)
-        
-        # Crear un tensor con las posiciones relativas para cada elemento
-        new_positions = torch.arange(result.size(1), device=self.device)
-        # Aplicar el embedding temporal a cada posición
-        new_time_embeddings = self.projectTimeData(new_positions)
-        # Expandir las dimensiones para que coincidan con el batch
-        new_time_embeddings = new_time_embeddings.unsqueeze(0).expand(result.size(0), -1, -1)
-        
-        # Sumar los embeddings temporales a los datos
-        result = result + new_time_embeddings
-            
             
         print(f"Result shape: {result.shape}")
         return result

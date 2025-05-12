@@ -13,14 +13,14 @@ MAX_LEAD_TIME = 20
 MIN_HOLDING_COST = 1
 MAX_HOLDING_COST = 10
 
-MIN_ORDERING_COST = 1 # TODO: Change this to a consisten value
-MAX_ORDERING_COST = 10 # TODO: Change this to a consisten value
+MIN_ORDERING_COST = 1 # TODO: Change this to a consistent value
+MAX_ORDERING_COST = 10 # TODO: Change this to a consistent value
 
-MIN_STOCKOUT_PENALTY = 1 # TODO: Change this to a consisten value
-MAX_STOCKOUT_PENALTY = 10 # TODO: Change this to a consisten value
+MIN_STOCKOUT_PENALTY = 1 # TODO: Change this to a consistent value
+MAX_STOCKOUT_PENALTY = 10 # TODO: Change this to a consistent value
 
-MIN_UNIT_REVENUE = 1 # TODO: Change this to a consisten value
-MAX_UNIT_REVENUE = 10 # TODO: Change this to a consisten value
+MIN_UNIT_REVENUE = 1 # TODO: Change this to a consistent value
+MAX_UNIT_REVENUE = 10 # TODO: Change this to a consistent value
 
 MIN_DEMAND_MEAN = 10
 MAX_DEMAND_MEAN = 20
@@ -108,7 +108,7 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
         print(f"Stock actual: {onHandLevel:.2f}")
         print(f"Stock en tránsito: {sum(inTransitStock)}")
         
-        #I the inventory level is updated with the amount received in the period t.
+        #If the inventory level is updated with the amount received in the period t.
         onHandLevel = onHandLevel + inTransitStock[0]  #the first element of the tensor is the amount that will arrive in the period t
         inTransitStock = np.roll(inTransitStock, -1)  #shift the tensor to the left
         inTransitStock[-1] = 0  #set to 0 the last element of the tensor which are not used
@@ -140,7 +140,7 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
         print(f"Income: {totalIncome:.2f}")
         
         #Calculate the total stock, which is the physical stock plus the stock in transit.
-        inventoryPosition = onHandLevel + sum(inTransitStock)  #inventory position = on hand/inventoyr level +  on order/in transit
+        inventoryPosition = onHandLevel + sum(inTransitStock)  #inventory position = on hand/inventoyr level + on order/in transit
         print(f"Inventory position: {inventoryPosition:.2f}")
 
         #decide the amount to order and calculate the costs 
@@ -177,9 +177,9 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
     for t in range(trajectoryLength):
         if t>RETURN_TO_GO_WINDOW: # if the time step is greater than the return-to-go window
             #add the benefit from the previous period to the window
-            BenefitToAdd= totalBenefit[t-RETURN_TO_GO_WINDOW]-totalBenefit[t-RETURN_TO_GO_WINDOW-1] # the total benefit is the accumulated benefit, we need to subtract the acumulated benefit from the previos period to the one we are adding
+            BenefitToAdd= totalBenefit[t-RETURN_TO_GO_WINDOW]-totalBenefit[t-RETURN_TO_GO_WINDOW-1] # the total benefit is the accumulated benefit, we need to subtract the accumulated benefit from the previous period to the one we are adding
             #subtract the benefit from the current period from the window
-            benefitToSubstract= totalBenefit[t]-totalBenefit[t-1] # the benefit is the accumulated benefit, we need to subtract the acumulated benefit from the previos period to the one we are substracting
+            benefitToSubstract= totalBenefit[t]-totalBenefit[t-1] # the benefit is the accumulated benefit, we need to subtract the accumulated benefit from the previous period to the one we are substracting
             returnToGo=(reward*RETURN_TO_GO_WINDOW+BenefitToAdd-benefitToSubstract)/RETURN_TO_GO_WINDOW
             trajectory[t]['returnToGo'] = returnToGo
             print(f"Calculo del return-to-go en el periodo {t}:")
