@@ -55,11 +55,21 @@ class TrainerConfig:
         self.lr_scheduler = lr_scheduler
     
     def to_dict(self):
+<<<<<<< HEAD
        dict = {
         "nBatch": self.nBatch,
         "nVal": self.nVal,
         "stepsPerEpoch": self.stepsPerEpoch,
         "trainStrategy": self.trainStrategy,
+=======
+       # Si se quiere poner el optimizer y el scheduler,
+       # habría que añadirlo en un formato compatible con JSON 
+       dict = {
+           "nBatch": self.nBatch,
+           "nVal": self.nVal,
+           "stepsPerEpoch": self.stepsPerEpoch,
+           "trainStrategy": self.trainStrategy,
+>>>>>>> b61f1f5ae849d84838cf6e7e8f0257846f6835c7
        }
        return dict
 
