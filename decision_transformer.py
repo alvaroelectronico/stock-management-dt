@@ -210,6 +210,7 @@ class DecisionTransformer(nn.Module):
         # Aplicar embeddings posicionales localmente
         statesEmbedding = statesEmbedding + positionsEmbeddings
         returnsToGoEmbedding = returnsToGoEmbedding + positionsEmbeddings
+        actionsEmbedding = actionsEmbedding + positionsEmbeddings
         
         print(f"\nDimensiones en forward:")
         print(f"returnsToGo shape: {returnsToGo.shape}")
@@ -267,17 +268,9 @@ class DecisionTransformer(nn.Module):
         print(f"Cantidad ordenada: {td['orderQuantity']}")
     
 
-        # project the order quantity to an embedding and add it to the actions embedding
+        # Añadir la acción al embedding sin posición temporal (se añadirá localmente en el siguiente forward)
         actionEmbedding = self.embeddingAction(orderQuantity).unsqueeze(1)
         td["actionsEmbedding"] = self.addSequenceData(td, td["actionsEmbedding"], actionEmbedding)
-        # Actualizar actionsEmbedding con el nuevo valor
-        actionsEmbedding = td["actionsEmbedding"]
-        # Recalcular embeddings posicionales para acciones
-        actionPositions = torch.arange(actionsEmbedding.size(1), device=self.device)
-        actionPositionsEmbeddings = self.projectTimeData(actionPositions)
-        actionPositionsEmbeddings = actionPositionsEmbeddings.unsqueeze(0).expand(actionsEmbedding.size(0), -1, -1)
-        # Aplicar embeddings posicionales actualizados
-        actionsEmbedding = actionsEmbedding + actionPositionsEmbeddings
         print(f"Actions embedding shape: {td['actionsEmbedding'].shape}")
 
         #Actualizar todos los datos
@@ -386,6 +379,17 @@ class DecisionTransformer(nn.Module):
         return td
 
     def addSequenceData(self, td, tensor, data):
+        """
+        Añade nuevos datos a la secuencia manteniendo un máximo de maxSeqLength elementos.
+        
+        Args:
+            td: TensorDict con los datos del estado actual
+            tensor: Tensor existente con la secuencia [batch_size, seq_len, embedding_dim]
+            data: Nuevos datos a añadir [batch_size, 1, embedding_dim] o [batch_size, embedding_dim]
+        
+        Returns:
+            Tensor actualizado con la nueva secuencia [batch_size, min(seq_len+1, maxSeqLength), embedding_dim]
+        """
         print(f"\nDebug addSequenceData:")
         print(f"Tensor original shape: {tensor.shape}")
         print(f"Data to add shape: {data.shape}")
@@ -394,9 +398,12 @@ class DecisionTransformer(nn.Module):
         if data.dim() == 2:
             data = data.unsqueeze(1)
         
-        # Manejar el caso cuando el tensor está lleno
+        # Si el tensor está vacío, simplemente devolver los datos
+        if tensor.size(1) == 0:
+            return data
+            
+        # Si el tensor está lleno, mantener solo los últimos maxSeqLength-1 elementos
         if tensor.size(1) >= self.maxSeqLength:
-            # Mantener solo los últimos maxSeqLength-1 elementos
             tensor = tensor[:, -self.maxSeqLength+1:, :]
             # Asegurar que data tenga la misma forma que tensor
             data = data[:, :1, :]  # Tomar solo el primer elemento
