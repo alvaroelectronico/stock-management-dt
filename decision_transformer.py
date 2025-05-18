@@ -31,7 +31,7 @@ class DecisionTransformer(nn.Module):
         self.decisionTransformerConfig = decisionTransformerConfig
         self.embeddingDim = decisionTransformerConfig.hidden_size
 
-        self.maxSeqLength = TRAJECTORY_LENGTH #provisionalmente es el mismo que el de la secuencia de datos
+        self.maxSeqLength = 90 #provisionalmente 
 
 
 
@@ -67,7 +67,6 @@ class DecisionTransformer(nn.Module):
         self.outputProjection = nn.Linear(self.embeddingDim, 1)  
         self.softplus = nn.Softplus()
         #self.relu = nn.ReLU()
-        #CAMBIAR ESTA RELU A LA QUE MULTIPLICA POR LA PENDIENTE
         #PROBAR TAMBIEN CON SOFTPLUS NN.SOFTPLUS
     
 
@@ -75,7 +74,7 @@ class DecisionTransformer(nn.Module):
 
 
     def initModel(self, td): 
-        batchSize = td["leadTime"].size(0) #change this constant to the batch size of the data  
+        batchSize = td["leadTime"].size(0)   
         print(f" este es Batch size: {batchSize}")
         print(f"Lead time: {td['leadTime'][0][0]}")
         leadTime = int(td["leadTime"][0][0])
@@ -115,8 +114,6 @@ class DecisionTransformer(nn.Module):
         print("\nEstado Inicial:")
         print(f"Timestep actual: {td['currentTimestep']}")
         print(f"Stock físico: {td['onHandLevel']}")
-        print(f"Stock en tránsito: {td['inTransitStock']}")
-        print(f"Forecast: {td['forecast']}")
         print(f"InTransitStock original shape: {td['inTransitStock'].shape}")  # [batch_size, leadTime-1]
     
 
@@ -131,7 +128,6 @@ class DecisionTransformer(nn.Module):
             ], dim=-1)
         print(f"Scalar data shape: {scalarData.shape}")
         
-        print(f"\nScalar data: {scalarData}")
 
         demandData = td["forecast"]    
         stockInTransitData = td["inTransitStock"].float().unsqueeze(-1)
@@ -161,21 +157,25 @@ class DecisionTransformer(nn.Module):
         print(f"Demand projection shape: {demandDataProjection.shape}")
 
         # project the time data
-        timeIndicesDemand = torch.arange(TRAJECTORY_LENGTH, device=td["forecast"].device).long() #no estoy segura de si es así
-        timeIndicesStockInTransit = torch.arange(leadTime-1, device=td["inTransitStock"].device).long() #considerando que todos los elementos del batch tienen el mismo lead time
-    
-        timeDataProjectionDemand = self.projectTimeData(timeIndicesDemand) 
-        timeDataProjectionStockInTransit = self.projectTimeData(timeIndicesStockInTransit) 
+        timeIndices = torch.arange(max(self.maxSeqLength, leadTime-1), device=td["forecast"].device).long()
+        timeDataProjection = self.projectTimeData(timeIndices)
+
+        print(f"\nDebug dimensiones:")
+        print(f"timeDataProjection shape: {timeDataProjection.shape}")
+        print(f"stockInTransitDataProjection shape: {stockInTransitDataProjection.shape}")
+        print(f"leadTime: {leadTime}, type: {type(leadTime)}")
 
         # add the time data to the demand and the stock in transit data
-        demandTimeEmbedding = demandDataProjection + timeDataProjectionDemand.unsqueeze(0) #[batch_size, FORECAST_LENGTH, embedding_dim] + [1, FORECAST_LENGTH, embedding_dim] = [batch_size, FORECAST_LENGTH, embedding_dim]
-        StockInTransitTimeEmbedding = stockInTransitDataProjection + timeDataProjectionStockInTransit.unsqueeze(0) # [batch_size, lead_time-1, embedding_dim] + [1, lead_time-1, embedding_dim] = [batch_size, lead_time-1, embedding_dim]
+        # Para demanda, usar solo hasta TRAJECTORY_LENGTH
+        demandTimeEmbedding = demandDataProjection + timeDataProjection[:self.maxSeqLength].unsqueeze(0)
+        # Para stock en tránsito, usar solo hasta leadTime-1
+        stockInTransitTimeEmbedding = stockInTransitDataProjection + timeDataProjection[:int(leadTime)-1].unsqueeze(0).expand_as(stockInTransitDataProjection)
 
         print(f"\nDemand time embedding shape: {demandTimeEmbedding.shape}")
-        print(f"Stock in transit time embedding shape: {StockInTransitTimeEmbedding.shape}")
+        print(f"Stock in transit time embedding shape: {stockInTransitTimeEmbedding.shape}")
 
         # concatenate the demand and the stock in transit data
-        demandStockTimeEmbedding = torch.cat([demandTimeEmbedding, StockInTransitTimeEmbedding], dim=1)
+        demandStockTimeEmbedding = torch.cat([demandTimeEmbedding, stockInTransitTimeEmbedding], dim=1)
 
         print(f"\nDemand stock time embedding shape: {demandStockTimeEmbedding.shape}")
 
@@ -190,10 +190,15 @@ class DecisionTransformer(nn.Module):
 
         td["statesEmbedding"] = self.addSequenceData(td, td["statesEmbedding"], mhaState)
         print(f"States embedding shape: {td['statesEmbedding'].shape}")
-        returnsToGo=td["returnsToGo"].float()
+        returnsToGo = td["returnsToGo"].clone().float()
         print(f"Returns to go shape: {returnsToGo.shape}")
-        print(f"Returns to go reshape: {returnsToGo.reshape(-1,1).shape}")
-        embeddingsReturnsToGo = self.embeddingReturnsToGo(returnsToGo.reshape(-1,1)).unsqueeze(1).permute(1,0,2)
+        
+        # Reshape returns to go para que cada elemento del batch tenga su propio embedding
+        batch_size = returnsToGo.size(0)
+        returnsToGo = returnsToGo.view(-1, 1)  # [batch_size * seq_len, 1]
+        embeddingsReturnsToGo = self.embeddingReturnsToGo(returnsToGo)  # [batch_size * seq_len, embedding_dim]
+        embeddingsReturnsToGo = embeddingsReturnsToGo.view(batch_size, -1, self.embeddingDim)  # [batch_size, seq_len, embedding_dim]
+        
         print(f"Embeddings returns to go shape: {embeddingsReturnsToGo.shape}")
         td["returnsToGoEmbedding"] = self.addSequenceData(td, td["returnsToGoEmbedding"],
                                                           embeddingsReturnsToGo)
@@ -210,7 +215,8 @@ class DecisionTransformer(nn.Module):
         # Aplicar embeddings posicionales localmente
         statesEmbedding = statesEmbedding + positionsEmbeddings
         returnsToGoEmbedding = returnsToGoEmbedding + positionsEmbeddings
-        actionsEmbedding = actionsEmbedding + positionsEmbeddings
+        # Para acciones, solo usar las posiciones hasta la longitud actual de actionsEmbedding
+        actionsEmbedding = actionsEmbedding + positionsEmbeddings[:, :actionsEmbedding.size(1), :]
         
         print(f"\nDimensiones en forward:")
         print(f"returnsToGo shape: {returnsToGo.shape}")
@@ -277,60 +283,87 @@ class DecisionTransformer(nn.Module):
         
         print("\nActualización del Sistema:")
         print("Antes de actualizar:")
-        print(f"Stock físico: {td['onHandLevel']}")
         print(f"Stock físico shape: {td['onHandLevel'].shape}")
-        print(f"Forecast: {(td['forecast'][...,0:1]).shape}")
-        print(f"Forecast: {td['forecast'][...,0:1]}")
+        print(f"InTransitStock shape: {td['inTransitStock'].shape}")
+        print(f"Forecast shape: {td['forecast'][...,0:1].shape}")
 
+        # Asegurar que las dimensiones coincidan antes de sumar
+        batch_idx = torch.arange(td["onHandLevel"].size(0), device=self.device)
+        
+        # Actualizar onHandLevel con el stock en tránsito que llega
+        td["onHandLevel"] = td["onHandLevel"] + td["inTransitStock"][batch_idx, 0].unsqueeze(-1)
+        
+        # Calcular stockout y income para el timestep actual
+        # Obtener el índice del timestep actual para cada batch
+        currentTimeStep = td["currentTimestep"].long()
 
-        #td["onHandLevel"] = torch.add(td["onHandLevel"], td["inTransitStock"][...,0:1])
-        td["onHandLevel"] = torch.add(td["onHandLevel"], td["inTransitStock"][...,0])
-        print(f"Stock físico shape: {td['onHandLevel'].shape}")
-        stockOutPenalty = (td["stockOutPenalty"] * torch.max(torch.zeros_like(td["forecast"][..., 0]), td["forecast"][..., 0] - td["onHandLevel"]))
-        income = td["unitRevenue"] * torch.min(td["forecast"][..., 0], td["onHandLevel"])
+        #current_demand = td["forecast"][..., currentTimeStep[0][0], 0]  # [batch_size]
+        current_demand = td["forecast"][batch_idx, currentTimeStep.squeeze(-1), 0]
+        print(f"Current demand shape: {current_demand.shape}")
+        current_stock = td["onHandLevel"][batch_idx, currentTimeStep.squeeze(-1)]  # [batch_size]
+        print(f"Current stock shape: {current_stock.shape}")
+        # Calcular income y stockout para el timestep actual
+        stockOutPenalty = (td["stockOutPenalty"][batch_idx, currentTimeStep.squeeze(-1)] * torch.max(torch.zeros_like(current_demand), 
+                                                           current_demand - current_stock)).unsqueeze(-1)  # [batch_size, 1]
+        print(f"Stock out penalty shape: {stockOutPenalty.shape}")
+        income = (td["unitRevenue"][batch_idx, currentTimeStep.squeeze(-1)] * torch.min(current_demand, current_stock)).unsqueeze(-1)  # [batch_size, 1]
+        print(f"Income shape: {income.shape}")
 
         td["onHandLevel"] = torch.clamp(torch.sub(td["onHandLevel"], td["forecast"][..., 0]), min=0) 
 
-        holdingCost = (td["holdingCost"] * td["onHandLevel"])
+        # Calcular holding cost y ordering cost para el timestep actual
+        holdingCost = (td["holdingCost"][batch_idx, currentTimeStep.squeeze(-1)] * current_stock).unsqueeze(-1)  # [batch_size, 1]
+        print(f"Holding cost shape: {holdingCost.shape}")
+        
+        # Corregir el cálculo de orderingCost para que tenga forma [batch_size, 1]
         orderingCost = torch.where(
-            orderQuantity > 0,
-            td["orderingCost"],  # Si hay pedido
-            torch.zeros_like(td["orderingCost"])  # Si no hay pedido
-            )
-
+            orderQuantity.squeeze(-1) > 0,  # [batch_size]
+            td["orderingCost"][batch_idx, currentTimeStep.squeeze(-1)],  # [batch_size]
+            torch.zeros_like(td["orderingCost"][batch_idx, currentTimeStep.squeeze(-1)])  # [batch_size]
+        ).unsqueeze(-1)  # [batch_size, 1]
+        print(f"Ordering cost shape: {orderingCost.shape}")
         print("\nDespués de recibir stock en tránsito:")
-        print(f"Stock físico: {td['onHandLevel']}")
         print(f"Stock físico shape: {td['onHandLevel'].shape}")
-        print("\nCostes y Beneficios:")
-        print(f"Penalización por rotura: {stockOutPenalty}")
-        print(f"Ingresos: {income}")
-        print(f"Coste de almacenamiento: {holdingCost}")
-        print(f"Coste de pedido: {orderingCost}")
-        print(f"Return-to-go actual: {td['returnsToGo']}")
     
     
         currentTimeStep = td["currentTimestep"].long()
         print(f"Current timestep: {currentTimeStep}")
-        # Calcular el beneficio actual
+        
+        # Calcular el beneficio actual (ahora será [batch_size, 1])
         benefitUpdate = (income - holdingCost - stockOutPenalty - orderingCost).float()
-        # Asegurar que benefitUpdate tenga la forma [batch_size, 1]
-        benefitUpdate = benefitUpdate[:,currentTimeStep]
-        print(f"Beneficio actualizado: {benefitUpdate}")
-        print(f"Beneficio: {td['benefit']}")
-        print(f"Beneficio shape: {td['benefit'].shape}")
-        print(f"currentTimestep shape: {currentTimeStep.shape}")
+        print(f"BenefitUpdate shape: {benefitUpdate.shape}")  # Debería ser [batch_size, 1]
+        
+        
+        # Calcular el beneficio medio hasta el momento actual
+        mean_benefit = td["benefit"][..., :int(currentTimeStep[0][0])+1].mean(dim=-1, keepdim=True)  # [batch_size, 1]
+        print(f"Mean benefit shape: {mean_benefit.shape}")
+        
+        returnToGo = td["returnsToGo"]  # [batch_size, seq_len]
+        print(f"Returns to go shape antes de actualizar: {returnToGo.shape}")
 
-        returnToGo = td["returnsToGo"]
-
+        # Asegurar que las dimensiones coincidan
         mask = currentTimeStep >= RETURN_TO_GO_WINDOW
-        td["returnsToGo"] = torch.where(
+        print(f"\nDimensiones de los tensores:")
+        print(f"returnToGo shape: {returnToGo.shape}")
+        print(f"benefitUpdate shape: {benefitUpdate.shape}")
+        print(f"td['benefit'][...,0] shape: {td['benefit'][...,0].shape}")
+        print(f"mask shape: {mask.shape}")
+        print(f"currentTimeStep shape: {currentTimeStep.shape}")
+
+        # Actualizar returnsToGo usando el beneficio medio y el beneficio actual
+        current_returns = returnToGo[batch_idx, currentTimeStep.squeeze(-1)].unsqueeze(-1)  # [batch_size, 1]
+        current_benefit = td["benefit"][batch_idx, 0].unsqueeze(-1)  # [batch_size, 1]
+        
+        new_returns = torch.where(
             mask,
-            (returnToGo*RETURN_TO_GO_WINDOW - benefitUpdate + 
-             td["benefit"][...,0])/RETURN_TO_GO_WINDOW,
-            returnToGo
-        )
+            (current_returns * RETURN_TO_GO_WINDOW - benefitUpdate + current_benefit) / RETURN_TO_GO_WINDOW,
+            current_returns
+        ).squeeze(-1)  # [batch_size]
+        new_returns_to_go = td["returnsToGo"].clone()
+        new_returns_to_go[batch_idx, currentTimeStep.squeeze(-1)] = new_returns
+        td["returnsToGo"] = new_returns_to_go
+
         if mask.any():
-            oldBenefit = td["benefit"][...,0]
             # Hacer roll del beneficio
             td["benefit"] = torch.roll(td["benefit"], shifts=-1, dims=-1)
             # Actualizar el último valor con el beneficio nuevo
@@ -338,20 +371,11 @@ class DecisionTransformer(nn.Module):
             print(f"Ultimo beneficio: {td['benefit'][..., -1]}")
             td["benefit"][..., -1] = benefitUpdate.squeeze()
             print(f"Nuevo beneficio: {td['benefit'][..., -1]}")
-            td["returnsToGo"] = torch.where(
-                mask,
-                (returnToGo*RETURN_TO_GO_WINDOW - benefitUpdate + 
-                 oldBenefit)/RETURN_TO_GO_WINDOW,  # Usamos el penúltimo valor que acabamos de desplazar
-                returnToGo)
         else:
             # Si aún no llegamos a RETURN_TO_GO_WINDOW, actualizar normalmente
             td["benefit"][...,currentTimeStep] = benefitUpdate
-            #for b in range(td["benefit"].size(0)):
-                #td["benefit"][b, currentTimeStep[b, 0]] = benefitUpdate[b, 0]
 
-
-        print(f"Beneficio: {td['benefit']}")
-        print(f"Return-to-go actual: {td['returnsToGo']}")
+        print(f"Returns to go shape después de actualizar: {td['returnsToGo'].shape}")
     
 
 
@@ -366,13 +390,17 @@ class DecisionTransformer(nn.Module):
         td["currentTimestep"] = td["currentTimestep"] + 1
 
         td["forecast"] = torch.roll(td["forecast"], shifts=-1, dims=-1)
-        td["forecast"][..., -1] = torch.normal(mean=demand_mean, std=demand_std, size=(td["forecast"].shape[0],))   #el size sirve para que se genere un valor por cada batch
+        # Generar nuevo forecast con la forma correcta [batch_size, FORECAST_LENGTH]
+        new_forecast = torch.normal(
+            mean=demand_mean, 
+            std=demand_std, 
+            size=(td["forecast"].shape[0], 1)
+        )
+        td["forecast"][..., -1] = new_forecast
 
         print("\nEstado Final:")
         print(f"Nuevo timestep: {td['currentTimestep']}")
         print(f"Stock físico final: {td['onHandLevel']}")
-        print(f"Stock en tránsito actualizado: {td['inTransitStock']}")
-        print(f"Nuevo forecast: {td['forecast']}")
     
         print("\n=== Fin Forward Pass ===\n")
 
@@ -463,15 +491,13 @@ if __name__ == "__main__":
     #})
     
     print(f"inTransitStock shape: {td['inTransitStock'].shape}")
-    td['inTransitStock'][0, 2] = 100
-    td['inTransitStock'][1, 3] = 150
+   
     
     print("\n=== Valores iniciales ===")
     print(f"Batch size: {td['batch_size']}")
     print(f"\nParámetros del sistema:")
     print(f"Holding Cost: {td['holdingCost']}")
     print(f"Ordering Cost: {td['orderingCost']}")
-    print(f"Stockout Penalty: {td['stockoutPenalty']}")
     print(f"Unit Revenue: {td['unitRevenue']}")
     print(f"Lead Time: {td['leadTime']}")
     print(f"returnsToGo: {td['returnsToGo']}")

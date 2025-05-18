@@ -12,7 +12,7 @@ import copy
 from tensordict import TensorDict
 import os
 import json
-from datetime import datetime
+from datetime import date
 
 
 
@@ -70,20 +70,23 @@ class DecisionTransformerTrainer(Trainer):
     #Entrenamiento del modelo
     def train(self):
         epoch = 0
+        max_epochs = 10  # Número máximo de épocas
         
         print("\n=== Iniciando entrenamiento ===")
         print(f"Pasos por época: {self.stepsPerEpoch}")
         print(f"Tamaño del batch: {self.nBatch}")
-        
+        print(f"Longitud de la ventana de contexto: {self.model.maxSeqLength}")
+        print(f"Número máximo de épocas: {max_epochs}")
+
         # Inicializar métricas
         self.training_metrics = {
             'epoch_losses': [],
             'validation_losses': [],
-            'ordered_quantities': []  # Nueva métrica para cantidades ordenadas
+            'ordered_quantities': []
         }
         
         #Bucle de entrenamiento
-        while True:
+        while True:  # Condición de parada
             print(f"\n=== Comenzando época {epoch} ===")
             epochLoss = 0
             currentStep = 1
@@ -91,7 +94,7 @@ class DecisionTransformerTrainer(Trainer):
             #Bucle de pasos de entrenamiento de un epoch
             while currentStep <= self.stepsPerEpoch:
                 print(f"\nStep {currentStep}/{self.stepsPerEpoch}")
-                
+
                 #Obtener datos de entrenamiento
                 dtData = self.trainStrategy.getTrainingData(self.nBatch)
                 problemData, orderQuantityData, returnsToGoData = dtData
@@ -102,34 +105,56 @@ class DecisionTransformerTrainer(Trainer):
                 # Convertir los datos a la GPU si está disponible
                 orderQuantityData = orderQuantityData.to(self.device)
                 returnsToGoData = returnsToGoData.to(self.device)
-                td = problemData.to(self.device)
+                td = {k: v.to(self.device) for k, v in problemData.items()}
+                #td = problemData.to(self.device)
                 
                 #inicializar el modelo con los datos del problema
                 self.model.setInitalReturnToGo(td, returnsToGoData) 
                 td = self.model.initModel(td)
 
-                # Variables para almacenar predicciones y valores reales de la trayectoria
+                # Variables para almacenar predicciones y valores reales
                 allPredictedActions = []
                 allRealActions = []
                 
-                # Procesar la trayectoria completa
-                trajectoryLength = orderQuantityData.size(1)  # Longitud de la trayectoria
-                print(f"Procesando trayectoria de longitud {trajectoryLength}")
+                # Obtener la longitud total de la trayectoria
+                trajectoryLength = orderQuantityData.size(1)
+                print(f"\nProcesando trayectoria de longitud {trajectoryLength}")
+                print(f"Tamaño de ventana de contexto: {self.model.maxSeqLength}")
+                print(f"Número de ventanas a procesar: {trajectoryLength - self.model.maxSeqLength + 1}")
                 
-                for t in range(trajectoryLength):
-                    print(f"  Paso {t+1}/{trajectoryLength} de la trayectoria")
+                # Procesar la trayectoria usando ventanas deslizantes
+                for window_start in range(0, trajectoryLength - self.model.maxSeqLength + 1, self.model.maxSeqLength):
+                    window_end = window_start + self.model.maxSeqLength
+                    print(f"\n=== Ventana {window_start}-{window_end} ===")
+                    print(f"Tamaño de la ventana: {window_end - window_start}")
                     
-                    # Forward pass
+                    # Actualizar el timestep actual - ajustar el batch size
+                    td["currentTimestep"] = torch.full((self.nBatch, 1), window_start, device=self.device)
+                    print(f"Timestep actual: {td['currentTimestep'].squeeze().tolist()}")
+                    td["currentTimestep"] = torch.zeros((self.nBatch, 1), device=self.device)
+                    print(f"Timestep actual (reiniciado):{td['currentTimestep'].squeeze().tolist()}")
+
+                    # Recortar los tensores secuenciales a la ventana
+                    for key in ["onHandLevel", "holdingCost", "orderingCost", "stockOutPenalty", "unitRevenue", "leadTime","forecast","inTransitStock", "returnsToGo", "actions"]:
+                        if key in td and td[key].dim() > 1 and td[key].shape[1] >= window_end:
+                            td[key] = td[key][:, window_start:window_end]
+
+                    # Forward pass para la ventana actual
                     td = self.model.forward(td)
                     predictedAction = td["orderQuantity"]
                     
+                    # Verificar dimensiones de las predicciones
+                    print(f"Dimensiones de la predicción: {predictedAction.shape}")
+                    print(f"Dimensiones de la acción real: {orderQuantityData[:, window_end-1:window_end].shape}")
+                    
                     # Guardar predicción y valor real
                     allPredictedActions.append(predictedAction)
-                    allRealActions.append(orderQuantityData[:, t:t+1])
+                    allRealActions.append(orderQuantityData[:, window_end-1:window_end])
                     
-                    print(f"  Predicción: {predictedAction.item():.2f}, Real: {orderQuantityData[:, t].item():.2f}")
+                    print(f"Predicción media: {predictedAction.mean().item():.2f}")
+                    print(f"Valor real medio: {orderQuantityData[:, window_end-1].mean().item():.2f}")
                 
-                # Calcular la pérdida para toda la trayectoria
+                # Calcular la pérdida para todas las predicciones
                 predictedTensor = torch.cat(allPredictedActions, dim=1)
                 realTensor = torch.cat(allRealActions, dim=1)
                 loss = nn.MSELoss()(predictedTensor, realTensor)
@@ -185,8 +210,32 @@ class DecisionTransformerTrainer(Trainer):
             self.content["EPOCHS"][epoch] = {
                 "training_loss": avgEpochLoss,
                 "validation_loss": validation_loss,
-                "learning_rate": self.optimizer.param_groups[0]['lr']
+                "learning_rate": self.optimizer.param_groups[0]['lr'],
+                "context_windows": {
+                    "trajectory_length": trajectoryLength,
+                    "max_seq_length": self.model.maxSeqLength,
+                    "num_windows": trajectoryLength - self.model.maxSeqLength + 1,
+                    "windows": []
+                }
             }
+
+            # Añadir información de cada ventana
+            for window_start in range(0, trajectoryLength - self.model.maxSeqLength + 1):
+                window_end = window_start + self.model.maxSeqLength
+                window_info = {
+                    "window_range": [window_start, window_end],
+                    "window_size": window_end - window_start,
+                    "predictions": {
+                        "mean": float(predictedTensor[:, window_end-1].mean().item()),
+                        "std": float(predictedTensor[:, window_end-1].std().item())
+                    },
+                    "real_values": {
+                        "mean": float(realTensor[:, window_end-1].mean().item()),
+                        "std": float(realTensor[:, window_end-1].std().item())
+                    }
+                }
+            self.content["EPOCHS"][epoch]["context_windows"]["windows"].append(window_info)
+
             self.updateTrackFile()
             print("Métricas guardadas exitosamente")
             
@@ -203,7 +252,7 @@ class DecisionTransformerTrainer(Trainer):
         print("\nIniciando validación del modelo...")
         self.model.eval()  # Poner el modelo en modo evaluación
         total_loss = 0
-        n_val = self.nVal  # Número de muestras de validación (10 en tu caso)
+        n_val = self.nVal
         
         with torch.no_grad():
             for _ in range(n_val):
@@ -220,16 +269,39 @@ class DecisionTransformerTrainer(Trainer):
                 # Inicializar el modelo
                 self.model.setInitalReturnToGo(td, returnsToGoData)
                 td = self.model.initModel(td)
+                
+                # Variables para almacenar predicciones y valores reales
+                allPredictedActions = []
+                allRealActions = []
+                
+                # Obtener la longitud total de la trayectoria
+                trajectoryLength = orderQuantityData.size(1)
+                
+                # Procesar la trayectoria usando ventanas deslizantes
+                for window_start in range(0, trajectoryLength - self.model.maxSeqLength + 1, self.model.maxSeqLength):
+                    window_end = window_start + self.model.maxSeqLength
+                    
+                    # Actualizar el timestep actual - ajustar el batch size
+                    td["currentTimestep"] = torch.zeros((self.nBatch, 1), device=self.device)
+                    print(f"Timestep actual (reiniciado):{td['currentTimestep'].squeeze().tolist()}")
 
-                for key in ["returnsToGoEmbedding", "statesEmbedding", "actionsEmbedding"]:
-                    if td[key].shape[1] > 1:
-                        td[key] = td[key][:, -1:, :]
+                    # Recortar los tensores secuenciales a la ventana
+                    for key in ["onHandLevel", "holdingCost", "orderingCost", "stockOutPenalty", "unitRevenue", "leadTime","forecast","inTransitStock", "returnsToGo", "actions"]:
+                        if key in td and td[key].dim() > 1 and td[key].shape[1] >= window_end:
+                            td[key] = td[key][:, window_start:window_end]
+
+                    # Forward pass para la ventana actual
+                    td = self.model.forward(td)
+                    predictedAction = td["orderQuantity"]
+                    
+                    # Guardar predicción y valor real
+                    allPredictedActions.append(predictedAction)
+                    allRealActions.append(orderQuantityData[:, window_end-1:window_end])
                 
-                # Forward pass
-                predictedAction = self.model(td)["orderQuantity"]
-                
-                # Calcular pérdida
-                loss = nn.MSELoss()(predictedAction, orderQuantityData)
+                # Calcular la pérdida para todas las predicciones
+                predictedTensor = torch.cat(allPredictedActions, dim=1)
+                realTensor = torch.cat(allRealActions, dim=1)
+                loss = nn.MSELoss()(predictedTensor, realTensor)
                 
                 total_loss += loss.item()
         

@@ -28,7 +28,7 @@ MAX_DEMAND_MEAN = 20
 MIN_DEMAND_STD = 1
 MAX_DEMAND_STD = 2
 
-TRAJECTORY_LENGTH = 100
+TRAJECTORY_LENGTH = 200
 FORECAST_LENGTH = 10 
 
 RETURN_TO_GO_WINDOW = 10 #TODO: Change this to a consisten value
@@ -199,7 +199,8 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
         padded[:len(inTransitStock)] = inTransitStock
         return padded
     
-    trajectory = TensorDict({
+    # Convertir la trayectoria a TensorDict
+    new_trajectory = TensorDict({
         'states': TensorDict({
             'onHandLevel': torch.stack([torch.tensor(t['state']['onHandLevel'], dtype=torch.float) for t in trajectory]),
             'inTransitStock': torch.stack([torch.tensor(addPaddingToTransitStock(t['state']['inTransitStock']), dtype=torch.float) for t in trajectory]),
@@ -211,20 +212,26 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
             'stockOutPenalty': torch.stack([torch.tensor(t['state']['stockOutPenalty'], dtype=torch.float) for t in trajectory]),
             'unitRevenue': torch.stack([torch.tensor(t['state']['unitRevenue'], dtype=torch.float) for t in trajectory]),
             'timesStep': torch.stack([torch.tensor(t['state']['timesStep'], dtype=torch.float) for t in trajectory]),
-        }).unsqueeze(0),
-        'actions': torch.stack([torch.tensor(t['action'], dtype=torch.float) for t in trajectory]).unsqueeze(0),
-        'returnsToGo': torch.stack([torch.tensor(t['returnToGo'], dtype=torch.float) for t in trajectory]).unsqueeze(0)
-    }, batch_size=[1])
-    return trainingData.update(trajectory)
+        }),
+        'actions': torch.stack([torch.tensor(t['action'], dtype=torch.float) for t in trajectory]),
+        'returnsToGo': torch.stack([torch.tensor(t['returnToGo'], dtype=torch.float) for t in trajectory])
+    })
+    
+    # Si es la primera trayectoria, inicializar trainingData
+    if len(trainingData) == 0:
+        return new_trajectory.unsqueeze(0)
+    
+    # Concatenar la nueva trayectoria con las existentes
+    return torch.cat([trainingData, new_trajectory.unsqueeze(0)], dim=0)
 
 
 
 
 
 if __name__ == "__main__":
-    noTrajectories = 5 #era 100
-    # Inicializar trainingData como None
-    trainingData = TensorDict({}, batch_size=[1])
+    noTrajectories = 50 #era 100
+    # Inicializar trainingData como un TensorDict vacío
+    trainingData = TensorDict({})
     
     print(f"Iniciando generación de {noTrajectories} trayectorias...")
     
@@ -244,13 +251,15 @@ if __name__ == "__main__":
     
     print(f"\nGeneración de trayectorias completada.")
     print(f"Tamaño de datos de entrenamiento: {len(trainingData)}")
-    print("Estructura final de los datos:")
-    print("Forma de trainingData:", trainingData.shape)
-    print("Keys en trainingData:", trainingData.keys())
-    print("Forma de states:", trainingData['states'].shape if 'states' in trainingData else "No states")
-    print("Forma de actions:", trainingData['actions'].shape if 'actions' in trainingData else "No actions")
-    print("Forma de returnsToGo:", trainingData['returnsToGo'].shape if 'returnsToGo' in trainingData else "No returnsToGo")
-    print("Tamaño de states:", trainingData['states'])
+    print("\nEstructura detallada de los datos:")
+    print("Forma general de trainingData:", trainingData.shape)
+    print("\nFormas de cada componente:")
+    print("States:")
+    for key, value in trainingData['states'].items():
+        print(f"  {key}: {value.shape}")
+    print(f"\nActions: {trainingData['actions'].shape}")
+    print(f"Returns to go: {trainingData['returnsToGo'].shape}")
+    
     print("\nPrimera trayectoria completa:")
     trayectoria_idx = 0  # Cambiar para ver otras trayectorias
     for timestep in range(TRAJECTORY_LENGTH):
@@ -261,4 +270,5 @@ if __name__ == "__main__":
         print(f"Return to go: {trainingData['returnsToGo'][trayectoria_idx][timestep]}")
 
     print(trainingData)
+    print(trainingData.shape)
 

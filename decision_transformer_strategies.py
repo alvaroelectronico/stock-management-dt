@@ -48,15 +48,15 @@ class DTTrainingStrategy(TrainingStrategy):
             print(f"\nCargando archivo {i+1}/{len(self.dataPath)}: {path}")
             element = torch.load(path, weights_only=False)
             
+            print(f"\nDEBUG - Dimensiones del archivo {i+1}:")
+            print(f"States batch_size: {element['states'].batch_size}")
+            print(f"Actions shape: {element['actions'].shape}")
+            print(f"Returns shape: {element['returnsToGo'].shape}")
+            
             # Añadir los datos a las listas
             allProblemData.append(element["states"])
             allOrderQuantityData.append(element["actions"])
             allReturnsToGoData.append(element["returnsToGo"])
-            
-            print(f"Tamaño del archivo {i+1}:")
-            print(f"- Estados: {element['states'].batch_size}")
-            print(f"- Acciones: {element['actions'].shape}")
-            print(f"- Returns: {element['returnsToGo'].shape}")
 
         # Concatenar todos los datos
         print("\nConcatenando todos los datos...")
@@ -64,11 +64,11 @@ class DTTrainingStrategy(TrainingStrategy):
         self.orderQuantityData = torch.cat(allOrderQuantityData, dim=0)
         self.returnsToGoData = torch.cat(allReturnsToGoData, dim=0)
 
-        print("\nDatos finales concatenados:")
+        print("\nDEBUG - Dimensiones finales después de concatenar:")
+        print(f"problemData batch_size: {self.problemData.batch_size}")
+        print(f"orderQuantityData shape: {self.orderQuantityData.shape}")
+        print(f"returnsToGoData shape: {self.returnsToGoData.shape}")
         print(f"Total de trayectorias: {self.problemData.batch_size[0]}")
-        print(f"Tamaño de problemData: {self.problemData.batch_size}")
-        print(f"Tamaño de orderQuantityData: {self.orderQuantityData.shape}")
-        print(f"Tamaño de returnsToGoData: {self.returnsToGoData.shape}")
 
         # Inicializar índices y contador
         self.lengthData = self.problemData.batch_size[0]
@@ -130,6 +130,31 @@ class DTTrainingStrategy(TrainingStrategy):
             'dataPath': self.dataPath,
             'shuffle': self.shuffle,
         }
+
+if __name__ == "__main__":
+    print("\n=== Probando carga de datos de entrenamiento ===")
+    
+    # Configurar la ruta a los datos
+    data_path = ["data/training_data.pt"]
+    
+    print("\nInicializando DTTrainingStrategy...")
+    strategy = DTTrainingStrategy(dataPath=data_path)
+    
+    print("\nProbando getTrainingData con batch_size=4...")
+    batch, order_quantity, returns = strategy.getTrainingData(batchSize=4)
+    
+    print("\nDimensiones del batch obtenido:")
+    print(f"Batch shape: {batch.batch_size}")
+    print(f"Order quantity shape: {order_quantity.shape}")
+    print(f"Returns shape: {returns.shape}")
+    
+    print("\nProbando getValidationData...")
+    val_batch, val_order_quantity, val_returns = strategy.getValidationData(batchSize=1)
+    
+    print("\nDimensiones de los datos de validación:")
+    print(f"Validation batch shape: {val_batch.batch_size}")
+    print(f"Validation order quantity shape: {val_order_quantity.shape}")
+    print(f"Validation returns shape: {val_returns.shape}")
 
 
 

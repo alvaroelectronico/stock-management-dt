@@ -18,7 +18,7 @@ if __name__ == "__main__":
         context_feed_feedforward_dim=192*5,
         encoder_number_layers=6,
         encoder_number_heads=12,
-        mha_number_heads=12,        
+        mha_number_heads=12,
 
         # dt
         n_layer=6,
@@ -42,7 +42,7 @@ if __name__ == "__main__":
     )
 
     trainerConfig = TrainerConfig(
-        nBatch=4,
+        nBatch=1,
         nVal=10, #400,
         stepsPerEpoch=stepsPerEpoch,
         trainStrategy=trainStrategy,
@@ -53,10 +53,13 @@ if __name__ == "__main__":
     savePath = (getProjectDirectory() +
                 "/training_models/decision_transformer/")
     trainer = DecisionTransformerTrainer(savePath=savePath, name="test_model", model=model, trainerConfig=trainerConfig)
-    
+
     print("\n=== Iniciando prueba del modelo ===")
     print(f"Steps por epoch: {stepsPerEpoch}")
     print(f"Batch size: {trainerConfig.nBatch}")
     print(f"Tamaño de validación: {trainerConfig.nVal}")
+
+    # Habilitar detección de anomalías
+    torch.autograd.set_detect_anomaly(True)
     
     trainer.initTraining()
