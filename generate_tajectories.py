@@ -85,13 +85,14 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
     print(f"Demand mean: {demand_mean}, Demand std: {demand_std}")
     # Calulating EOQ
     
-    orderQuantity = np.sqrt(2*orderingCost*demand_mean/holdingCost)
-    print(f"Order quantity: {orderQuantity}")
+    eoq = np.sqrt(2*orderingCost*demand_mean/holdingCost)
+    print(f"EOQ calculado: {eoq:.2f}")
+
     # Calculating ROP for a given CSL
     k = stats.norm.ppf(CSL)
     safetyStock = k * demand_std * np.sqrt(leadTime)  #generalizar  CSL probabilidad que durante un ciclo haya rotura para definir la k
-    reorderPoint = demand_mean + safetyStock
-    onHandLevel = orderQuantity/2 + safetyStock
+    reorderPoint = demand_mean*leadTime + safetyStock
+    onHandLevel = eoq/2 + safetyStock
 
     print(f"Reorder point: {reorderPoint}, On hand level: {onHandLevel}")
 
@@ -144,15 +145,18 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
         print(f"Inventory position: {inventoryPosition:.2f}")
 
         #decide the amount to order and calculate the costs 
+        current_order_quantity = 0  # Inicializar la cantidad a ordenar en este período
         if inventoryPosition <= reorderPoint:
             noOrders += 1
-            inTransitStock[-1]= orderQuantity  # save the order in transit that will arrive in the period t+leadTime
+            current_order_quantity = eoq  # Usar el EOQ calculado
+            inTransitStock[-1] = current_order_quantity
             totalOrderingCost += orderingCost
+            print(f"Ordenando {current_order_quantity:.2f} unidades (EOQ)")
         else:
-            orderQuantity = 0
+            print(f"No se ordena - Inventory Position ({inventoryPosition:.2f}) > Reorder Point ({reorderPoint:.2f})")
         
         print(f"No orders: {noOrders}")
-        print(f"stock en transito: {inTransitStock}")
+        print(f"Stock en tránsito: {inTransitStock}")
         print(f"Ordering cost: {totalOrderingCost:.2f}")
 
         #Calculate the holding cost and the benefit
@@ -161,10 +165,10 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
         totalBenefit[t]=totalIncome - totalHoldingCost - totalStockOutCost - totalOrderingCost 
         print(f"Benefit: {totalBenefit[t]:.2f}")
     
-         #Add the trajectory
+         #Add the trajectory con la cantidad actual a ordenar
         trajectory.append({
-            'state':state, 
-            'action':orderQuantity, 
+            'state': state, 
+            'action': current_order_quantity,  # Usar la cantidad actual a ordenar
             'returnToGo': 0.0})
         
         #Calculate the reward
@@ -218,7 +222,7 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
     })
     
     # Si es la primera trayectoria, inicializar trainingData
-    if len(trainingData) == 0:
+    if len(trainingData.keys()) == 0:
         return new_trajectory.unsqueeze(0)
     
     # Concatenar la nueva trayectoria con las existentes

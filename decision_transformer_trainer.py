@@ -38,6 +38,7 @@ class DecisionTransformerTrainer(Trainer):
         metrics_data = {
             'epoch_losses': self.training_metrics['epoch_losses'],
             'validation_losses': self.training_metrics['validation_losses'],
+            'validation_cost_metrics': self.training_metrics['validation_cost_metrics'],
             'final_learning_rate': self.optimizer.param_groups[0]['lr'],
             'ordered_quantities': []  # Añadir las cantidades ordenadas
         }
@@ -67,21 +68,24 @@ class DecisionTransformerTrainer(Trainer):
         
         print(f"Métricas guardadas en: {metrics_path}")
 
+       
+
     #Entrenamiento del modelo
     def train(self):
-        epoch = 0
-        max_epochs = 10  # Número máximo de épocas
-        
+        epoch = 0        
         print("\n=== Iniciando entrenamiento ===")
         print(f"Pasos por época: {self.stepsPerEpoch}")
         print(f"Tamaño del batch: {self.nBatch}")
         print(f"Longitud de la ventana de contexto: {self.model.maxSeqLength}")
-        print(f"Número máximo de épocas: {max_epochs}")
+
+        # Guardar los parámetros iniciales del optimizador
+        #self.saveOptimizerParams(epoch, 0)
 
         # Inicializar métricas
         self.training_metrics = {
             'epoch_losses': [],
             'validation_losses': [],
+            'validation_cost_metrics': [],
             'ordered_quantities': []
         }
         
@@ -123,42 +127,50 @@ class DecisionTransformerTrainer(Trainer):
                 print(f"Número de ventanas a procesar: {trajectoryLength - self.model.maxSeqLength + 1}")
                 
                 # Procesar la trayectoria usando ventanas deslizantes
-                for window_start in range(0, trajectoryLength - self.model.maxSeqLength + 1, self.model.maxSeqLength):
+                for window_start in range(0, trajectoryLength, 1):
                     window_end = window_start + self.model.maxSeqLength
-                    print(f"\n=== Ventana {window_start}-{window_end} ===")
-                    print(f"Tamaño de la ventana: {window_end - window_start}")
-                    
-                    # Actualizar el timestep actual - ajustar el batch size
-                    td["currentTimestep"] = torch.full((self.nBatch, 1), window_start, device=self.device)
-                    print(f"Timestep actual: {td['currentTimestep'].squeeze().tolist()}")
-                    td["currentTimestep"] = torch.zeros((self.nBatch, 1), device=self.device)
-                    print(f"Timestep actual (reiniciado):{td['currentTimestep'].squeeze().tolist()}")
+                    if window_end - window_start == self.model.maxSeqLength and window_end < trajectoryLength:
+                        print(f"\n=== Ventana {window_start}-{window_end} ===")
+                        print(f"Tamaño de la ventana: {window_end - window_start}")
+                        # Recortar los tensores secuenciales a la ventana
+                        for key in ["onHandLevel", "holdingCost", "orderingCost", "stockOutPenalty", "unitRevenue",
+                                    "leadTime", "forecast", "inTransitStock", "returnsToGo", "actions"]:
+                            if key in td and td[key].dim() > 1 and td[key].shape[1] >= window_end:
+                                td[key] = td[key][:, window_start:window_end]
 
-                    # Recortar los tensores secuenciales a la ventana
-                    for key in ["onHandLevel", "holdingCost", "orderingCost", "stockOutPenalty", "unitRevenue", "leadTime","forecast","inTransitStock", "returnsToGo", "actions"]:
-                        if key in td and td[key].dim() > 1 and td[key].shape[1] >= window_end:
-                            td[key] = td[key][:, window_start:window_end]
+                        # Actualizar el timestep a cero
+                        td["currentTimestep"] = torch.zeros((self.nBatch, 1), device=self.device)
 
-                    # Forward pass para la ventana actual
-                    td = self.model.forward(td)
-                    predictedAction = td["orderQuantity"]
-                    
-                    # Verificar dimensiones de las predicciones
-                    print(f"Dimensiones de la predicción: {predictedAction.shape}")
-                    print(f"Dimensiones de la acción real: {orderQuantityData[:, window_end-1:window_end].shape}")
-                    
-                    # Guardar predicción y valor real
-                    allPredictedActions.append(predictedAction)
-                    allRealActions.append(orderQuantityData[:, window_end-1:window_end])
-                    
-                    print(f"Predicción media: {predictedAction.mean().item():.2f}")
-                    print(f"Valor real medio: {orderQuantityData[:, window_end-1].mean().item():.2f}")
+                        print(f"Timestep actual:{td['currentTimestep'].squeeze().tolist()}")
+
+                        nextAction = orderQuantityData[:, window_end:window_end+1]  # Acción real para comparar
+                            
+                        # Modo entrenamiento: usar acción real y actualizar pesos
+                        self.model.train()
+                        td = self.model.forward(td, nextOrderQuantity=nextAction, is_test=False)
+                        predictedAction = td["predictedAction"]  # Usar la predicción para calcular pérdida
+                            
+                        # Guardar predicción y valor real
+                        allPredictedActions.append(predictedAction)
+                        allRealActions.append(nextAction)
+                            
+                        print(f"Predicción media: {predictedAction.mean().item():.2f}")
+                        print(f"Valor real medio: {nextAction.mean().item():.2f}")
+                        
+                    # Si hemos llegado a la última ventana (que termina en 199), salir del bucle
+                    if window_end >= trajectoryLength:
+                        break
                 
                 # Calcular la pérdida para todas las predicciones
                 predictedTensor = torch.cat(allPredictedActions, dim=1)
                 realTensor = torch.cat(allRealActions, dim=1)
                 loss = nn.MSELoss()(predictedTensor, realTensor)
-                
+
+                for i in range(len(allPredictedActions)):
+                    allPredictedActions[i] = allPredictedActions[i].detach()
+                for i in range(len(allRealActions)):
+                    allRealActions[i] = allRealActions[i].detach()
+
                 # Guardar las cantidades de la trayectoria
                 batch_quantities = {
                     'epoch': epoch,
@@ -176,8 +188,8 @@ class DecisionTransformerTrainer(Trainer):
                 self.lr_scheduler.step()
                 
                 # Acumular la pérdida
-                epochLoss += loss.item()
-                print(f"Pérdida de la trayectoria: {loss.item():.4f}")
+                epochLoss += loss.detach().item()
+                print(f"Pérdida de la trayectoria: {loss.detach().item():.4f}")
                 
                 # Incrementar el contador de steps
                 currentStep += 1
@@ -189,52 +201,46 @@ class DecisionTransformerTrainer(Trainer):
             
             # Validación del modelo
             print("\nIniciando validación...")
-            validation_loss = self.validate_model()
+            validation_loss, cost_metrics = self.validate_model()
             self.training_metrics['validation_losses'].append(validation_loss)
+            self.training_metrics['validation_cost_metrics'].append(cost_metrics)
             print(f"Pérdida de validación: {validation_loss:.4f}")
-            
-            # Actualizar mejor modelo si es necesario
-            #if validation_loss < best_validation_loss:
-            #    best_validation_loss = validation_loss
-            #    self.training_metrics['best_validation_loss'] = validation_loss
-            #    self.training_metrics['best_epoch'] = epoch
-            #    epochs_without_improvement = 0
-            #    print("¡Nuevo mejor modelo encontrado! Guardando...")
-            #    self.saveBestModel()
-            #else:
-            #    epochs_without_improvement += 1
-            #    print(f"Épocas sin mejora: {epochs_without_improvement}/{patience}")
+            print(f"Métricas de coste de validación:")
+            print(f"  Coste medio predicho: {cost_metrics['predicted_mean_cost']:.2f}")
+            print(f"  Coste medio real: {cost_metrics['real_mean_cost']:.2f}")
+            print(f"  Diferencia de coste: {cost_metrics['cost_difference']:.2f}")
             
             # Guardar métricas en el archivo de seguimiento
             print("Guardando métricas en track.json...")
             self.content["EPOCHS"][epoch] = {
                 "training_loss": avgEpochLoss,
                 "validation_loss": validation_loss,
+                "validation_cost_metrics": cost_metrics,
                 "learning_rate": self.optimizer.param_groups[0]['lr'],
                 "context_windows": {
                     "trajectory_length": trajectoryLength,
                     "max_seq_length": self.model.maxSeqLength,
-                    "num_windows": trajectoryLength - self.model.maxSeqLength + 1,
+                    "num_windows": trajectoryLength - self.model.maxSeqLength,
                     "windows": []
                 }
             }
 
             # Añadir información de cada ventana
-            for window_start in range(0, trajectoryLength - self.model.maxSeqLength + 1):
+            for window_start in range(0, trajectoryLength - self.model.maxSeqLength-1, 1):
                 window_end = window_start + self.model.maxSeqLength
                 window_info = {
                     "window_range": [window_start, window_end],
                     "window_size": window_end - window_start,
-                    "predictions": {
-                        "mean": float(predictedTensor[:, window_end-1].mean().item()),
-                        "std": float(predictedTensor[:, window_end-1].std().item())
-                    },
-                    "real_values": {
-                        "mean": float(realTensor[:, window_end-1].mean().item()),
-                        "std": float(realTensor[:, window_end-1].std().item())
-                    }
+                    #"predictions": {
+                    #    "mean": float(predictedTensor[:, window_end].mean().item()),
+                    #    "std": float(predictedTensor[:, window_end].std().item())
+                    #},
+                    #"real_values": {
+                    #    "mean": float(realTensor[:, window_end].mean().item()),
+                    #    "std": float(realTensor[:, window_end].std().item())
+                    #}
                 }
-            self.content["EPOCHS"][epoch]["context_windows"]["windows"].append(window_info)
+                self.content["EPOCHS"][epoch]["context_windows"]["windows"].append(window_info)
 
             self.updateTrackFile()
             print("Métricas guardadas exitosamente")
@@ -248,14 +254,78 @@ class DecisionTransformerTrainer(Trainer):
             self.saveTrainingMetrics()
             print("Modelo y métricas guardados exitosamente")
 
+    def calculate_trajectory_cost(self, td):
+        """
+        Calcula los costes de una trayectoria usando el estado actual del sistema.
+        
+        Args:
+            td: TensorDict con el estado actual del sistema
+        
+        Returns:
+            dict: Diccionario con los costes y métricas de la trayectoria
+        """
+        batch_size = td["onHandLevel"].size(0)
+        trajectory_length = td["forecast"].size(1)
+        
+        # Inicializar listas para almacenar métricas
+        holding_costs = []
+        ordering_costs = []
+        stockout_costs = []
+        sales_revenue = []
+        total_costs = []
+        on_hand_levels = []
+        in_transit_levels = []
+        
+        # Para cada paso en la trayectoria
+        for t in range(trajectory_length):
+            # Obtener el estado actual
+            current_stock = td["onHandLevel"][:, t]
+            current_demand = td["forecast"][:, t, 0]
+            current_order = td["orderQuantity"][:, t] if "orderQuantity" in td else torch.zeros_like(current_stock)
+            
+            # Calcular costes y beneficios
+            holding_cost = td["holdingCost"] * current_stock
+            ordering_cost = torch.where(current_order > 0, td["orderingCost"], torch.zeros_like(td["orderingCost"]))
+            sales = torch.min(current_demand, current_stock)
+            stockout = torch.max(torch.zeros_like(current_demand), current_demand - current_stock)
+            
+            # Calcular ingresos y penalizaciones
+            revenue = sales * td["unitRevenue"]
+            stockout_penalty = stockout * td["stockOutPenalty"]
+            
+            # Calcular beneficio total
+            total_cost = holding_cost + ordering_cost + stockout_penalty - revenue
+            
+            # Guardar métricas
+            holding_costs.append(holding_cost.mean().item())
+            ordering_costs.append(ordering_cost.mean().item())
+            stockout_costs.append(stockout_penalty.mean().item())
+            sales_revenue.append(revenue.mean().item())
+            total_costs.append(total_cost.mean().item())
+            on_hand_levels.append(current_stock.mean().item())
+            in_transit_levels.append(td["inTransitStock"][:, t].mean().item())
+        
+        return {
+            'holding_cost': np.mean(holding_costs),
+            'ordering_cost': np.mean(ordering_costs),
+            'stockout_cost': np.mean(stockout_costs),
+            'sales_revenue': np.mean(sales_revenue),
+            'total_cost': np.mean(total_costs),
+            'avg_on_hand': np.mean(on_hand_levels),
+            'avg_in_transit': np.mean(in_transit_levels),
+            'total_orders': sum(1 for x in ordering_costs if x > 0),
+            'total_stockouts': sum(1 for x in stockout_costs if x > 0)
+        }
+
     def validate_model(self):
         print("\nIniciando validación del modelo...")
-        self.model.eval()  # Poner el modelo en modo evaluación
         total_loss = 0
         n_val = self.nVal
         
         with torch.no_grad():
-            for _ in range(n_val):
+            for val_step in range(n_val):
+                print(f"\n=== Validación {val_step + 1}/{n_val} ===")
+                
                 # Obtener datos de validación
                 dtData = self.trainStrategy.getValidationData(self.nBatch)
                 problemData, orderQuantityData, returnsToGoData = dtData
@@ -264,7 +334,6 @@ class DecisionTransformerTrainer(Trainer):
                 orderQuantityData = orderQuantityData.to(self.device)
                 returnsToGoData = returnsToGoData.to(self.device)
                 td = {k: v.to(self.device) for k, v in problemData.items()}
-                #td = problemData.to(self.device)
                 
                 # Inicializar el modelo
                 self.model.setInitalReturnToGo(td, returnsToGoData)
@@ -277,36 +346,94 @@ class DecisionTransformerTrainer(Trainer):
                 # Obtener la longitud total de la trayectoria
                 trajectoryLength = orderQuantityData.size(1)
                 
+                # Crear copias del estado para simular ambas trayectorias
+                td_real = {k: v.clone() for k, v in td.items()}
+                td_test = {k: v.clone() for k, v in td.items()}
+
+                # Inicializar orderQuantity para toda la trayectoria
+                td_real["orderQuantity"] = torch.zeros(self.nBatch, trajectoryLength, device=self.device)
+                td_test["orderQuantity"] = torch.zeros(self.nBatch, trajectoryLength, device=self.device)
+
                 # Procesar la trayectoria usando ventanas deslizantes
-                for window_start in range(0, trajectoryLength - self.model.maxSeqLength + 1, self.model.maxSeqLength):
+                for window_start in range(0, trajectoryLength, 1):
                     window_end = window_start + self.model.maxSeqLength
                     
-                    # Actualizar el timestep actual - ajustar el batch size
-                    td["currentTimestep"] = torch.zeros((self.nBatch, 1), device=self.device)
-                    print(f"Timestep actual (reiniciado):{td['currentTimestep'].squeeze().tolist()}")
+                    # Solo procesar cuando tengamos suficientes datos para llenar la ventana de contexto
+                    if window_end - window_start == self.model.maxSeqLength and window_end < trajectoryLength:
+                        td["currentTimestep"] = torch.zeros((self.nBatch, 1), device=self.device)
+                        print(f"Timestep actual (reiniciado):{td['currentTimestep'].squeeze().tolist()}")
 
-                    # Recortar los tensores secuenciales a la ventana
-                    for key in ["onHandLevel", "holdingCost", "orderingCost", "stockOutPenalty", "unitRevenue", "leadTime","forecast","inTransitStock", "returnsToGo", "actions"]:
-                        if key in td and td[key].dim() > 1 and td[key].shape[1] >= window_end:
-                            td[key] = td[key][:, window_start:window_end]
+                        # Recortar los tensores secuenciales a la ventana
+                        for key in ["onHandLevel", "holdingCost", "orderingCost", "stockOutPenalty", "unitRevenue", "leadTime", "forecast", "inTransitStock", "returnsToGo", "actions"]:
+                            if key in td_real and td_real[key].dim() > 1 and td_real[key].shape[1] >= window_end:
+                                td_real[key] = td_real[key][:, window_start:window_end]
+                                td_test[key] = td_test[key][:, window_start:window_end]
 
-                    # Forward pass para la ventana actual
-                    td = self.model.forward(td)
-                    predictedAction = td["orderQuantity"]
+                        # Actualizar el timestep actual
+                        td_real["currentTimestep"] = torch.full((self.nBatch, 1), window_start, device=self.device)
+                        td_test["currentTimestep"] = torch.full((self.nBatch, 1), window_start, device=self.device)
+
                     
-                    # Guardar predicción y valor real
-                    allPredictedActions.append(predictedAction)
-                    allRealActions.append(orderQuantityData[:, window_end-1:window_end])
+                        nextAction = orderQuantityData[:, window_end:window_end+1]
+                            
+                        # Modo validación: usar acción real sin actualizar pesos
+                        td_real = self.model.forward(td_real, nextOrderQuantity=nextAction, is_test=False)
+                        td_real["orderQuantity"][:, window_end] = nextAction.squeeze()
+
+                            
+                        # Modo test: usar predicciones del modelo
+                        td_test = self.model.forward(td_test, nextOrderQuantity=None, is_test=True)
+                        td_test["orderQuantity"][:, window_end] = td_test["predictedAction"].squeeze()
+
+                            
+                        # Guardar predicción y valor real
+                        allPredictedActions.append(td_test["predictedAction"])
+                        allRealActions.append(nextAction)
                 
                 # Calcular la pérdida para todas las predicciones
                 predictedTensor = torch.cat(allPredictedActions, dim=1)
                 realTensor = torch.cat(allRealActions, dim=1)
                 loss = nn.MSELoss()(predictedTensor, realTensor)
                 
+                # Calcular métricas para ambas trayectorias
+                real_metrics = self.calculate_trajectory_cost(td_real)
+                test_metrics = self.calculate_trajectory_cost(td_test)
+                
+                # Calcular métricas promedio
+                avg_metrics = {
+                    'real': real_metrics,
+                    'test': test_metrics,
+                    'difference': {
+                        'holding_cost': test_metrics['holding_cost'] - real_metrics['holding_cost'],
+                        'ordering_cost': test_metrics['ordering_cost'] - real_metrics['ordering_cost'],
+                        'stockout_cost': test_metrics['stockout_cost'] - real_metrics['stockout_cost'],
+                        'sales_revenue': test_metrics['sales_revenue'] - real_metrics['sales_revenue'],
+                        'total_cost': test_metrics['total_cost'] - real_metrics['total_cost']
+                    }
+                }
+                
                 total_loss += loss.item()
         
+        # Calcular promedios finales
+        avg_loss = total_loss / n_val
+        
+        print("\nMétricas de validación:")
+        print(f"Pérdida promedio: {avg_loss:.4f}")
+        print("\nMétricas de coste (Real vs Test):")
+        print(f"Coste de almacenamiento: {avg_metrics['real']['holding_cost']:.2f} vs {avg_metrics['test']['holding_cost']:.2f}")
+        print(f"Coste de pedido: {avg_metrics['real']['ordering_cost']:.2f} vs {avg_metrics['test']['ordering_cost']:.2f}")
+        print(f"Coste de rotura: {avg_metrics['real']['stockout_cost']:.2f} vs {avg_metrics['test']['stockout_cost']:.2f}")
+        print(f"Ingresos por ventas: {avg_metrics['real']['sales_revenue']:.2f} vs {avg_metrics['test']['sales_revenue']:.2f}")
+        print(f"Coste total: {avg_metrics['real']['total_cost']:.2f} vs {avg_metrics['test']['total_cost']:.2f}")
+        print("\nDiferencias (Test - Real):")
+        print(f"Diferencia en coste de almacenamiento: {avg_metrics['difference']['holding_cost']:.2f}")
+        print(f"Diferencia en coste de pedido: {avg_metrics['difference']['ordering_cost']:.2f}")
+        print(f"Diferencia en coste de rotura: {avg_metrics['difference']['stockout_cost']:.2f}")
+        print(f"Diferencia en ingresos: {avg_metrics['difference']['sales_revenue']:.2f}")
+        print(f"Diferencia en coste total: {avg_metrics['difference']['total_cost']:.2f}")
+        
         self.model.train()  # Volver al modo de entrenamiento
-        return total_loss / n_val
+        return avg_loss, avg_metrics
 
            
         
