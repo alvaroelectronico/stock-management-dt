@@ -38,7 +38,9 @@ class DecisionTransformerTrainer(Trainer):
         metrics_data = {
             'epoch_losses': self.training_metrics['epoch_losses'],
             'validation_losses': self.training_metrics['validation_losses'],
-            'validation_cost_metrics': self.training_metrics['validation_cost_metrics'],
+            'mean_test_total_cost': self.training_metrics['mean_test_total_cost'],
+            'mean_real_total_cost': self.training_metrics['mean_real_total_cost'],
+            'mean_cost_difference': self.training_metrics['mean_cost_difference'],
             'final_learning_rate': self.optimizer.param_groups[0]['lr'],
             'ordered_quantities': []  # Añadir las cantidades ordenadas
         }
@@ -206,31 +208,33 @@ class DecisionTransformerTrainer(Trainer):
             self.training_metrics['validation_cost_metrics'].append(cost_metrics)
             print(f"Pérdida de validación: {validation_loss:.4f}")
             print(f"Métricas de coste de validación:")
-            print(f"  Coste medio predicho: {cost_metrics['predicted_mean_cost']:.2f}")
-            print(f"  Coste medio real: {cost_metrics['real_mean_cost']:.2f}")
-            print(f"  Diferencia de coste: {cost_metrics['cost_difference']:.2f}")
+            print(f"  Coste predicho: {cost_metrics['test']['total_cost']:.2f}")
+            print(f"  Coste real: {cost_metrics['real']['total_cost']:.2f}")
+            print(f"  Diferencia de coste: {cost_metrics['difference']['total_cost']:.2f}")
             
             # Guardar métricas en el archivo de seguimiento
             print("Guardando métricas en track.json...")
             self.content["EPOCHS"][epoch] = {
                 "training_loss": avgEpochLoss,
                 "validation_loss": validation_loss,
-                "validation_cost_metrics": cost_metrics,
+                "mean_test_total_cost": cost_metrics['test']['total_cost'],
+                "mean_real_total_cost": cost_metrics['real']['total_cost'],
+                "mean_cost_difference": cost_metrics['difference']['total_cost'],
                 "learning_rate": self.optimizer.param_groups[0]['lr'],
                 "context_windows": {
                     "trajectory_length": trajectoryLength,
                     "max_seq_length": self.model.maxSeqLength,
                     "num_windows": trajectoryLength - self.model.maxSeqLength,
-                    "windows": []
+                    #"windows": []
                 }
             }
 
             # Añadir información de cada ventana
-            for window_start in range(0, trajectoryLength - self.model.maxSeqLength-1, 1):
-                window_end = window_start + self.model.maxSeqLength
-                window_info = {
-                    "window_range": [window_start, window_end],
-                    "window_size": window_end - window_start,
+            #for window_start in range(0, trajectoryLength - self.model.maxSeqLength-1, 1):
+                #window_end = window_start + self.model.maxSeqLength
+                #window_info = {
+                    #"window_range": [window_start, window_end],
+                    #"window_size": window_end - window_start,
                     #"predictions": {
                     #    "mean": float(predictedTensor[:, window_end].mean().item()),
                     #    "std": float(predictedTensor[:, window_end].std().item())
@@ -239,8 +243,8 @@ class DecisionTransformerTrainer(Trainer):
                     #    "mean": float(realTensor[:, window_end].mean().item()),
                     #    "std": float(realTensor[:, window_end].std().item())
                     #}
-                }
-                self.content["EPOCHS"][epoch]["context_windows"]["windows"].append(window_info)
+                #}
+                #self.content["EPOCHS"][epoch]["context_windows"]["windows"].append(window_info)
 
             self.updateTrackFile()
             print("Métricas guardadas exitosamente")
@@ -277,11 +281,11 @@ class DecisionTransformerTrainer(Trainer):
         in_transit_levels = []
         
         # Para cada paso en la trayectoria
-        for t in range(trajectory_length):
+        for t in range(td["orderQuantity"].size(1)):
             # Obtener el estado actual
             current_stock = td["onHandLevel"][:, t]
             current_demand = td["forecast"][:, t, 0]
-            current_order = td["orderQuantity"][:, t] if "orderQuantity" in td else torch.zeros_like(current_stock)
+            current_order = td["orderQuantity"][:, t] 
             
             # Calcular costes y beneficios
             holding_cost = td["holdingCost"] * current_stock
@@ -351,40 +355,33 @@ class DecisionTransformerTrainer(Trainer):
                 td_test = {k: v.clone() for k, v in td.items()}
 
                 # Inicializar orderQuantity para toda la trayectoria
-                td_real["orderQuantity"] = torch.zeros(self.nBatch, trajectoryLength, device=self.device)
-                td_test["orderQuantity"] = torch.zeros(self.nBatch, trajectoryLength, device=self.device)
+                #td_real["orderQuantity"] = torch.zeros(self.nBatch, trajectoryLength, device=self.device)
+                #td_test["orderQuantity"] = torch.zeros(self.nBatch, trajectoryLength, device=self.device)
+                print(f"\nDimensiones iniciales de orderQuantity: {td_real['orderQuantity'].shape}")
 
                 # Procesar la trayectoria usando ventanas deslizantes
                 for window_start in range(0, trajectoryLength, 1):
                     window_end = window_start + self.model.maxSeqLength
                     
-                    # Solo procesar cuando tengamos suficientes datos para llenar la ventana de contexto
                     if window_end - window_start == self.model.maxSeqLength and window_end < trajectoryLength:
-                        td["currentTimestep"] = torch.zeros((self.nBatch, 1), device=self.device)
-                        print(f"Timestep actual (reiniciado):{td['currentTimestep'].squeeze().tolist()}")
-
                         # Recortar los tensores secuenciales a la ventana
                         for key in ["onHandLevel", "holdingCost", "orderingCost", "stockOutPenalty", "unitRevenue", "leadTime", "forecast", "inTransitStock", "returnsToGo", "actions"]:
                             if key in td_real and td_real[key].dim() > 1 and td_real[key].shape[1] >= window_end:
                                 td_real[key] = td_real[key][:, window_start:window_end]
                                 td_test[key] = td_test[key][:, window_start:window_end]
 
-                        # Actualizar el timestep actual
-                        td_real["currentTimestep"] = torch.full((self.nBatch, 1), window_start, device=self.device)
-                        td_test["currentTimestep"] = torch.full((self.nBatch, 1), window_start, device=self.device)
+                        # Reiniciar el timestep para esta ventana
+                        td_real["currentTimestep"] = torch.zeros((self.nBatch, 1), device=self.device)
+                        td_test["currentTimestep"] = torch.zeros((self.nBatch, 1), device=self.device)
 
                     
                         nextAction = orderQuantityData[:, window_end:window_end+1]
                             
                         # Modo validación: usar acción real sin actualizar pesos
                         td_real = self.model.forward(td_real, nextOrderQuantity=nextAction, is_test=False)
-                        td_real["orderQuantity"][:, window_end] = nextAction.squeeze()
-
                             
                         # Modo test: usar predicciones del modelo
                         td_test = self.model.forward(td_test, nextOrderQuantity=None, is_test=True)
-                        td_test["orderQuantity"][:, window_end] = td_test["predictedAction"].squeeze()
-
                             
                         # Guardar predicción y valor real
                         allPredictedActions.append(td_test["predictedAction"])
@@ -433,7 +430,27 @@ class DecisionTransformerTrainer(Trainer):
         print(f"Diferencia en coste total: {avg_metrics['difference']['total_cost']:.2f}")
         
         self.model.train()  # Volver al modo de entrenamiento
-        return avg_loss, avg_metrics
+
+        # Lista de métricas por validación
+        validation_cost_metrics = self.training_metrics['validation_cost_metrics']  # lista de dicts
+        n_val = len(validation_cost_metrics)
+
+        # Sumar y hacer la media
+        mean_test_total_cost = sum(m['test']['total_cost'] for m in validation_cost_metrics) / n_val
+        mean_real_total_cost = sum(m['real']['total_cost'] for m in validation_cost_metrics) / n_val
+        mean_cost_difference = sum(m['difference']['total_cost'] for m in validation_cost_metrics) / n_val
+
+        return avg_loss, {
+            'test': {
+                'total_cost': mean_test_total_cost,
+                'real': {
+                    'total_cost': mean_real_total_cost,
+                    'difference': {
+                        'total_cost': mean_cost_difference
+                    }
+                }
+            }
+        }
 
            
         
@@ -443,9 +460,9 @@ if __name__ == "__main__":
     
     # Configuración básica
     config = TrainerConfig(
-        nBatch=1,#32
-        nVal=100,  # Ajusta este valor según tus necesidades
-        stepsPerEpoch=10,
+        nBatch=4,#32
+        nVal=1000,  # Ajusta este valor según tus necesidades
+        stepsPerEpoch=2000,
         trainStrategy=DTTrainingStrategy(dataPath=["C:/Users/elood/Desktop/DTgestionStock/Stock_management_dt/stock-management-dt/data/training_data.pt"]),
         lr_scheduler=1e-4
     )

@@ -464,7 +464,7 @@ class DecisionTransformer(nn.Module):
             print(f"\nElemento {i}:")
             print(f"  orderQuantity original: {td['orderQuantity'][i].item():.2f}")
             print(f"  inTransitStock final: {td['inTransitStock'][i, -1].item():.2f}")
-            print(f"  Acción real: {nextOrderQuantity[i].item() if nextOrderQuantity is not None else 'None':.2f}")
+            print(f"  Acción real: {nextOrderQuantity[i].item() if nextOrderQuantity is not None else 'None'}")
             print(f"  Acción predicha: {td['predictedAction'][i].item():.2f}")
 
         # 6. Verificación final
