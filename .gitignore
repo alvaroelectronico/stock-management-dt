@@ -5,3 +5,6 @@ test_models/
 __pycache__/
 logger/logger/logs/
 logger/__pycache__
+*.png
+*.json
+*.md
