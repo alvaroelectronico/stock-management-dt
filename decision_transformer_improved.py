@@ -327,7 +327,6 @@ class DecisionTransformer(nn.Module):
         orderAction = self.outputOrder(output)
         predictedActionScaled = self.softplus(predictedActionScaled)
         
-        # Desescalar predicción antes de guardarla
         predictedAction = self._unscale_field(predictedActionScaled, "orderQuantity")
         td["predictedAction"] = predictedAction
         td["predictedOrderDecision"] = orderAction
@@ -423,8 +422,6 @@ class DecisionTransformer(nn.Module):
 
             if is_test:
                 positions = torch.arange(statesEmbedding.size(1), device=self.device)
-                print(self.device)
-                print(statesEmbedding.device)
                 positionsEmbeddings = self.positionTimeEmbedding(positions)
                 positionsEmbeddings = positionsEmbeddings.unsqueeze(0).expand(statesEmbedding.size(0), -1, -1)
 

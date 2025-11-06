@@ -1,5 +1,5 @@
 from torch import nn
-from decision_transformer_improved import DecisionTransformer
+from decision_transformer_original import DecisionTransformer
 from trainer import Trainer, TrainerConfig
 import torch
 from decision_transformer_strategies import TrainingStrategy
