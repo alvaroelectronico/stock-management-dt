@@ -2,7 +2,7 @@ import os
 import torch
 import json
 from pathlib import Path
-from generate_tajectories import TRAJECTORY_LENGTH, FORECAST_LENGTH, MAX_LEAD_TIME
+from generate_trajectories import TRAJECTORY_LENGTH, FORECAST_LENGTH, MAX_LEAD_TIME
 
 
 def getProjectDirectory():

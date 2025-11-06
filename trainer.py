@@ -89,7 +89,8 @@ class Trainer:
         self.content = None
 
         if checkCompileSupport():
-            self.model = torch.compile(self.model)
+            #self.model = torch.compile(self.model)
+            pass
 
     @abstractmethod
     def createModel(self):
@@ -138,6 +139,7 @@ class Trainer:
         if checkpoint is not None:
             self.currentEpoch = checkpoint["start_epochs"]
 
+        self.model = self.model.to(self.device)
         self.train()
 
     def getStrategy(self):

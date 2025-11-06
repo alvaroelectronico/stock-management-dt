@@ -136,11 +136,11 @@ def getTestProblem(dataPath, problemIndex=0):
         'realActions': actionsData.unsqueeze(0),
         'realReturnsToGo': returnsToGoData
     })
-    
+
     return problem
 
 
-def testDecisionTransformer(model, problem, maxSteps=None):
+def tryDecisionTransformer(model, problem, maxSteps=None):
     """
     Ejecuta el Decision Transformer en modo autoregresivo.
     El modelo genera predicciones basándose en sus propias predicciones anteriores.
@@ -161,7 +161,7 @@ def testDecisionTransformer(model, problem, maxSteps=None):
     
     td = {k: v.clone() for k, v in problem.items()}
     td["returnsToGo"] = torch.zeros_like(td["returnsToGo"])
-    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     td = model.initModel(td)
     
     results = []
@@ -307,9 +307,9 @@ def runDecisionTransformerTest(modelPath, dataPath, problemIndex=0, maxSteps=Non
         Diccionario con el reporte completo
     """
     # Cargar modelo con parámetros de escalado calculados desde los datos
-    model = loadTrainedModel(modelPath, dataPath=dataPath)
-    problem = getTestProblem(dataPath, problemIndex)
-    results = testDecisionTransformer(model, problem, maxSteps)
+    model = loadTrainedModel(modelPath, dataPath=dataPath).to(device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+    problem = getTestProblem(dataPath, problemIndex).to(device=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    results = tryDecisionTransformer(model, problem, maxSteps)
     report = generateTestReport(results, outputPath)
     createActionComparisonPlot(results, plotOutputPath)
     
@@ -337,7 +337,7 @@ if __name__ == "__main__":
         report = runDecisionTransformerTest(
             modelPath=modelPath,
             dataPath=dataPath,
-            problemIndex=49,
+            problemIndex=2,
             maxSteps=30,
             outputPath=outputPath,
             plotOutputPath=plotOutputPath

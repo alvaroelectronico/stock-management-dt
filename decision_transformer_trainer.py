@@ -261,7 +261,7 @@ if __name__ == "__main__":
         nBatch=32,#32
         nVal=1000,  # Ajusta este valor según tus necesidades
         stepsPerEpoch=2000,
-        trainStrategy=DTTrainingStrategy(dataPath=["data/training_data.pt"]),
+        trainStrategy=DTTrainingStrategy(dataPath=["data/training_data2.pt"]),
         lr_scheduler=1e-4
     )
     
@@ -284,16 +284,16 @@ if __name__ == "__main__":
         
         # Learning rate scheduler más conservador
         lr_scheduler = torch.optim.lr_scheduler.LinearLR(
-            optimizer, 
+            optimizer,
             start_factor=1.0,  # Factor inicial (5e-4)
             end_factor=0.05,    # Factor final (2.5e-4 / 5e-4 = 0.5)
-            total_iters=100    # Mucho menos agresivo
+            total_iters=200    # Mucho menos agresivo
         )
         
         config = TrainerConfig(
-            nBatch=32,
+            nBatch=64,
             nVal=1000, 
-            stepsPerEpoch=10000//32,
+            stepsPerEpoch=64000//64*5,
             trainStrategy=DTTrainingStrategy(dataPath=data_paths),
             lr_scheduler=lr_scheduler,
             optimizer=optimizer

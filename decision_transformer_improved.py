@@ -25,6 +25,7 @@ from data_scaler import (
 
 def getTorchDevice():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    #return torch.device("cpu")
 
 def loadModel(path, decisionTransformerConfig, scaling_params=None):
     """
@@ -172,16 +173,15 @@ class DecisionTransformer(nn.Module):
 
 
     def initModel(self, td): 
-        batchSize = td["leadTime"].size(0)   
-        leadTime = int(torch.max(td["leadTime"]).item())
+        batchSize = td["leadTime"].size(0)
         device = getTorchDevice()
         if hasattr(td, 'clone'):
             tdNew = td.clone()
         else:
             tdNew = {k: v.clone() for k, v in td.items()}
 
-        tdNew["currentTimestep"] = torch.zeros((batchSize, 1), dtype=torch.long)
-        tdNew["orderQuantity"] = torch.zeros((batchSize, 1), dtype=torch.float32)
+        tdNew["currentTimestep"] = torch.zeros((batchSize, 1), dtype=torch.long, device=device)
+        tdNew["orderQuantity"] = torch.zeros((batchSize, 1), dtype=torch.float32, device=device)
         tdNew["onHandLevel"] = td["onHandLevel"]
         tdNew["inTransitStock"] = td["inTransitStock"][:, 0, :]
         tdNew["forecast"] = td["forecast"]
@@ -189,9 +189,9 @@ class DecisionTransformer(nn.Module):
         tdNew["stockOutPenalty"] = td["stockOutPenalty"]
         tdNew["unitRevenue"] = td["unitRevenue"]
         tdNew["leadTime"] = td["leadTime"]
-        tdNew["benefit"] = torch.zeros(batchSize, RETURN_TO_GO_WINDOW, dtype=torch.float32)
+        tdNew["benefit"] = torch.zeros(batchSize, RETURN_TO_GO_WINDOW, dtype=torch.float32, device=device)
         tdNew["returnsToGo"] = td["returnsToGo"]
-        tdNew["predictedAction"] = torch.zeros(batchSize, 1, dtype=torch.float32)
+        tdNew["predictedAction"] = torch.zeros(batchSize, 1, dtype=torch.float32, device=device)
         tdNew["demand"] = td["demand"]
 
         tdNew["statesEmbedding"] = torch.zeros((batchSize, 0, self.embeddingDim), dtype=torch.float, device=device)
@@ -348,8 +348,7 @@ class DecisionTransformer(nn.Module):
             is_test: Si True, usa predicciones del modelo
             update_only: Si True, solo actualiza el estado sin calcular predicciones
         """
-        batchSize = td["statesEmbedding"].size(0)  
-        leadTimeMax = int(torch.max(td["leadTime"]).item())
+        batchSize = td["statesEmbedding"].size(0)
         
         if not is_test and nextOrderQuantity is None and not update_only:
             raise ValueError("nextOrderQuantity debe ser proporcionado cuando is_test=False y update_only=False")
@@ -364,8 +363,6 @@ class DecisionTransformer(nn.Module):
                 td["saved_inTransitStock"].append(td["inTransitStock"].clone())
                 td["saved_onHandLevel"].append(td["onHandLevel"].clone())
             else:
-                currentTimeStep = td["currentTimestep"].long().squeeze(-1)
-                
                 # Escalar cada campo solo antes de usarlo en la proyección
                 onHandLevelScaled = self._scale_field(td["onHandLevel"], "onHandLevel")
                 holdingCostScaled = self._scale_field(td["holdingCost"], "holdingCost")
@@ -426,6 +423,8 @@ class DecisionTransformer(nn.Module):
 
             if is_test:
                 positions = torch.arange(statesEmbedding.size(1), device=self.device)
+                print(self.device)
+                print(statesEmbedding.device)
                 positionsEmbeddings = self.positionTimeEmbedding(positions)
                 positionsEmbeddings = positionsEmbeddings.unsqueeze(0).expand(statesEmbedding.size(0), -1, -1)
 
