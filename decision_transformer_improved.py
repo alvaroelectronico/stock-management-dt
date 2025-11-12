@@ -189,7 +189,7 @@ class DecisionTransformer(nn.Module):
         tdNew["stockOutPenalty"] = td["stockOutPenalty"]
         tdNew["unitRevenue"] = td["unitRevenue"]
         tdNew["leadTime"] = td["leadTime"]
-        tdNew["benefit"] = torch.zeros((batchSize, 0, 0), dtype=torch.float32, device=device)
+        tdNew["benefit"] = torch.zeros((batchSize, 0, 1), dtype=torch.float32, device=device)
         tdNew["returnsToGo"] = td["returnsToGo"]
         tdNew["predictedAction"] = torch.zeros(batchSize, 1, dtype=torch.float32, device=device)
         tdNew["demand"] = td["demand"]

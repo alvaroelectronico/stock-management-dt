@@ -67,6 +67,9 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
     """
     Genera trayectoria con warm-up hasta que llega el primer pedido.
     Guarda trajectoryLength pasos desde el momento en que llega el primer pedido (incluido ese paso).
+    
+    IMPORTANTE: Los costos e ingresos solo se acumulan cuando startRecording=True.
+    Durante el warm-up no se acumulan, por lo que el benefit empieza en 0 cuando inicia la grabación.
     """
     leadTime = inputData['leadtime'] 
     holdingCost = inputData['holdingCost']
@@ -135,14 +138,16 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
         current_order_quantity = 0
         if inventoryPosition <= reorderPoint:
             current_order_quantity = int(eoq)
-            totalOrderingCost += orderingCost
+            if startRecording:
+                totalOrderingCost += orderingCost
         
         inTransitStock[-1] = current_order_quantity
         
-        totalHoldingCost += holdingCost * onHandLevel
+        if startRecording:
+            totalHoldingCost += holdingCost * onHandLevel
+            totalStockOutCost += stockOutPenalty * max(0, currentDemand - onHandLevel)
+            totalIncome += unitRevenue * min(currentDemand, onHandLevel)
         
-        totalStockOutCost += stockOutPenalty * max(0, currentDemand - onHandLevel)
-        totalIncome += unitRevenue * min(currentDemand, onHandLevel)
         onHandLevel = max(0, int(onHandLevel - currentDemand))
         
         if startRecording:
