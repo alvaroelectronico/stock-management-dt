@@ -2,7 +2,9 @@ import os
 import torch
 import json
 import numpy as np
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import scipy.stats as stats
 from pathlib import Path
 from tensordict import TensorDict
 from decision_transformer_improved import DecisionTransformer, loadModel
@@ -134,7 +136,8 @@ def getTestProblem(dataPath, problemIndex=0):
         'leadTime': problemData['leadTime'].unsqueeze(0),
         'returnsToGo': returnsToGoData.unsqueeze(0),
         'realActions': actionsData.unsqueeze(0),
-        'realReturnsToGo': returnsToGoData
+        'realReturnsToGo': returnsToGoData,
+        'realBenefits': problemData['benefit'].unsqueeze(0) if 'benefit' in problemData else None
     })
 
     return problem
@@ -176,6 +179,9 @@ def tryDecisionTransformer(model, problem, maxSteps=None):
             td = model.forward(td, nextOrderQuantity=None, is_test=True, update_only=False)
             predictedAction = td['predictedAction'][0, 0].item()
         
+        predictedBenefit = td['benefit'][0, -1].item() if 'benefit' in td and td['benefit'].size(1) > 0 else 0.0
+        realBenefit = problem['realBenefits'][0, step].item() if problem.get('realBenefits') is not None else None
+        
         currentState = {
             'onHandLevel': td['onHandLevel'][0].item(),
             'inTransitStock': td['inTransitStock'][0].tolist(),
@@ -204,6 +210,8 @@ def tryDecisionTransformer(model, problem, maxSteps=None):
             'actionDifference': actionDifference,
             'actionError': actionError,
             'actionAccuracy': 1.0 - min(actionError, 1.0),
+            'predictedBenefit': predictedBenefit,
+            'realBenefit': realBenefit,
         }
         
         results.append(stepResult)
@@ -248,70 +256,107 @@ def generateTestReport(results, outputPath=None):
     return report
 
 
-def createActionComparisonPlot(results, outputPath=None):
-    """
-    Crea una gráfica comparando las acciones reales vs predichas usando datos de td.
+def createCombinedPlots(results, outputPath=None):
+    fig = make_subplots(
+        rows=3, cols=1,
+        subplot_titles=(
+            'Comparación: Acciones Reales vs Decision Transformer',
+            'Comparación: Benefits Reales vs Decision Transformer',
+            'Inventario Disponible vs Demanda por Paso'
+        ),
+        vertical_spacing=0.08,
+        row_heights=[0.33, 0.33, 0.34]
+    )
     
-    Args:
-        results: Lista de resultados de cada paso
-        outputPath: Ruta donde guardar la gráfica (opcional)
-    
-    Returns:
-        None
-    """
     steps = [r['step'] for r in results]
+    
     realActions = [r['realAction'] for r in results]
     predictedActions = [r['predictedAction'] for r in results]
-    
-    plt.figure(figsize=(12, 8))
-    
-    plt.plot(steps, realActions, 'b-', label='Acción Real', linewidth=2, marker='o', markersize=4)
-    plt.plot(steps, predictedActions, 'r--', label='Acción Predicha (DT)', linewidth=2, marker='s', markersize=4)
-    
-    plt.xlabel('Paso', fontsize=12)
-    plt.ylabel('Cantidad a Ordenar', fontsize=12)
-    plt.title('Comparación: Acciones Reales vs Decision Transformer', fontsize=14, fontweight='bold')
-    plt.legend(fontsize=11)
-    plt.grid(True, alpha=0.3)
-    
     avgError = np.mean([abs(r['realAction'] - r['predictedAction']) for r in results])
     avgAccuracy = np.mean([r['actionAccuracy'] for r in results])
     
-    plt.text(0.02, 0.98, f'Error Promedio: {avgError:.3f}\nPrecisión Promedio: {avgAccuracy:.3f}', 
-             transform=plt.gca().transAxes, fontsize=10, verticalalignment='top',
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    fig.add_trace(go.Scatter(x=steps, y=realActions, mode='lines+markers', name='Acción Real',
+                             line=dict(color='blue', width=2), marker=dict(size=4, symbol='circle')), row=1, col=1)
+    fig.add_trace(go.Scatter(x=steps, y=predictedActions, mode='lines+markers', name='Acción Predicha (DT)',
+                             line=dict(color='red', width=2, dash='dash'), marker=dict(size=4, symbol='square')), row=1, col=1)
     
-    plt.tight_layout()
+    predictedBenefits = [r['predictedBenefit'] for r in results]
+    hasRealBenefits = any(r['realBenefit'] is not None for r in results)
+    fig.add_trace(go.Scatter(x=steps, y=predictedBenefits, mode='lines+markers', name='Benefit Predicho (DT)',
+                             line=dict(color='red', width=2, dash='dash'), marker=dict(size=4, symbol='square')), row=2, col=1)
+    
+    if hasRealBenefits:
+        validResults = [r for r in results if r['realBenefit'] is not None]
+        realSteps = [r['step'] for r in validResults]
+        realBenefits = [r['realBenefit'] for r in validResults]
+        fig.add_trace(go.Scatter(x=realSteps, y=realBenefits, mode='lines+markers', name='Benefit Real',
+                                 line=dict(color='blue', width=2), marker=dict(size=4, symbol='circle')), row=2, col=1)
+    
+    onHandLevels = [r['state']['onHandLevel'] for r in results]
+    demands = [r['state']['demand'] for r in results]
+    fig.add_trace(go.Scatter(x=steps, y=onHandLevels, mode='lines+markers', name='Inventario Disponible',
+                             line=dict(color='green', width=2), marker=dict(size=4, symbol='circle')), row=3, col=1)
+    fig.add_trace(go.Scatter(x=steps, y=demands, mode='lines+markers', name='Demanda',
+                             line=dict(color='orange', width=2, dash='dash'), marker=dict(size=4, symbol='square')), row=3, col=1)
+    
+    fig.update_xaxes(title_text='Paso', row=1, col=1)
+    fig.update_xaxes(title_text='Paso', row=2, col=1)
+    fig.update_xaxes(title_text='Paso', row=3, col=1)
+    fig.update_yaxes(title_text='Cantidad a Ordenar', row=1, col=1)
+    fig.update_yaxes(title_text='Benefit Acumulado', row=2, col=1)
+    fig.update_yaxes(title_text='Cantidad', row=3, col=1)
+    
+    fig.add_annotation(text=f'Error Promedio: {avgError:.3f}<br>Precisión Promedio: {avgAccuracy:.3f}',
+                       xref='paper', yref='paper', x=0.02, y=0.98, xanchor='left', yanchor='top',
+                       showarrow=False, font=dict(size=10), align='left',
+                       bgcolor='rgba(245, 222, 179, 0.8)', bordercolor='rgba(0, 0, 0, 0.5)', borderwidth=1,
+                       row=1, col=1)
+    
+    if hasRealBenefits:
+        validResults = [r for r in results if r['realBenefit'] is not None]
+        avgError = np.mean([abs(r['predictedBenefit'] - r['realBenefit']) for r in validResults])
+        avgPredicted = np.mean([r['predictedBenefit'] for r in validResults])
+        avgReal = np.mean([r['realBenefit'] for r in validResults])
+        annotationText = f'Benefit Promedio Predicho: {avgPredicted:.3f}<br>Benefit Promedio Real: {avgReal:.3f}<br>Error Promedio: {avgError:.3f}'
+    else:
+        avgPredicted = np.mean(predictedBenefits)
+        annotationText = f'Benefit Promedio Predicho: {avgPredicted:.3f}'
+    
+    fig.add_annotation(text=annotationText, xref='paper', yref='paper', x=0.02, y=0.98,
+                       xanchor='left', yanchor='top', showarrow=False, font=dict(size=10), align='left',
+                       bgcolor='rgba(245, 222, 179, 0.8)', bordercolor='rgba(0, 0, 0, 0.5)', borderwidth=1,
+                       row=2, col=1)
+    
+    avgOnHand = np.mean(onHandLevels)
+    avgDemand = np.mean(demands)
+    minOnHand = np.min(onHandLevels)
+    maxOnHand = np.max(onHandLevels)
+    annotationText = f'Inventario Promedio: {avgOnHand:.3f}<br>Demanda Promedio: {avgDemand:.3f}<br>Inventario Mín: {minOnHand:.3f}<br>Inventario Máx: {maxOnHand:.3f}'
+    
+    fig.add_annotation(text=annotationText, xref='paper', yref='paper', x=0.02, y=0.98,
+                       xanchor='left', yanchor='top', showarrow=False, font=dict(size=10), align='left',
+                       bgcolor='rgba(245, 222, 179, 0.8)', bordercolor='rgba(0, 0, 0, 0.5)', borderwidth=1,
+                       row=3, col=1)
+    
+    fig.update_layout(height=2400, showlegend=True, hovermode='x unified')
     
     if outputPath:
-        plt.savefig(outputPath, dpi=300, bbox_inches='tight')
+        if outputPath.endswith('.html'):
+            fig.write_html(outputPath)
+        else:
+            fig.write_image(outputPath, width=1200, height=2400, scale=2)
     
-    plt.show()
+    fig.show()
     
-    return plt.gcf()
+    return fig
 
 
 def runDecisionTransformerTest(modelPath, dataPath, problemIndex=0, maxSteps=None, outputPath=None, plotOutputPath=None):
-    """
-    Función principal para ejecutar el test del Decision Transformer.
-    
-    Args:
-        modelPath: Ruta al modelo entrenado
-        dataPath: Ruta a los datos de entrenamiento
-        problemIndex: Índice del problema a usar
-        maxSteps: Número máximo de pasos
-        outputPath: Ruta donde guardar el reporte JSON
-        plotOutputPath: Ruta donde guardar la gráfica (opcional)
-    
-    Returns:
-        Diccionario con el reporte completo
-    """
-    # Cargar modelo con parámetros de escalado calculados desde los datos
     model = loadTrainedModel(modelPath, dataPath=dataPath).to(device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
     problem = getTestProblem(dataPath, problemIndex).to(device=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
     results = tryDecisionTransformer(model, problem, maxSteps)
     report = generateTestReport(results, outputPath)
-    createActionComparisonPlot(results, plotOutputPath)
+    createCombinedPlots(results, plotOutputPath)
     
     return report
 
@@ -321,7 +366,7 @@ if __name__ == "__main__":
     modelPath = os.path.join(projectDir, "training_models/decision_transformer_model", "training.pt")
     dataPath = os.path.join(projectDir, "data", "training_data2.pt")
     outputPath = os.path.join(projectDir, "test_results.json")
-    plotOutputPath = os.path.join(projectDir, "action_comparison_plot.png")
+    plotOutputPath = os.path.join(projectDir, "combined_plots.html")
     
     if not os.path.exists(modelPath):
         print(f"Error: No se encontró el modelo en {modelPath}")
@@ -345,7 +390,7 @@ if __name__ == "__main__":
         
         print(f"\nTest completado exitosamente!")
         print(f"Reporte detallado guardado en: {outputPath}")
-        print(f"Gráfica de comparación guardada en: {plotOutputPath}")
+        print(f"Gráficas combinadas guardadas en: {plotOutputPath}")
         
     except Exception as e:
         print(f"Error durante el test: {e}")

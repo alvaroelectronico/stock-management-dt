@@ -5,6 +5,7 @@ transformers>=4.30.0
 # Scientific Computing
 numpy>=1.24.0
 scipy>=1.10.0
+plotly>=5.0.0
 
 # Data Management
 tensordict>=0.1.0

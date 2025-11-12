@@ -146,13 +146,13 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
         onHandLevel = max(0, int(onHandLevel - currentDemand))
         
         if startRecording:
-            totalBenefit += totalIncome - totalHoldingCost - totalStockOutCost - totalOrderingCost
+            totalBenefit = totalIncome - totalHoldingCost - totalStockOutCost - totalOrderingCost
+            state["benefit"] = totalBenefit
             
             trajectory.append({
                 'state': state, 
                 'action': current_order_quantity,
-                'returnToGo': 0.0,
-                'benefit': totalBenefit
+                'returnToGo': 0.0
             })
             
             stepsRecorded += 1
@@ -206,10 +206,10 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
             'stockOutPenalty': torch.tensor(first_state['stockOutPenalty'], dtype=torch.float),
             'unitRevenue': torch.tensor(first_state['unitRevenue'], dtype=torch.float),
             'timesStep': torch.stack([torch.tensor(t['state']['timesStep'], dtype=torch.float) for t in trajectory]),
+            'benefit': torch.tensor([t['state']['benefit'] for t in trajectory], dtype=torch.float)
         }),
         'actions': torch.stack([torch.tensor(t['action'], dtype=torch.float) for t in trajectory]),
-        'returnsToGo': torch.tensor(trajectory[0]['returnToGo'], dtype=torch.float),
-        'benefit': torch.tensor(trajectory[-1]['benefit'], dtype=torch.float)
+        'returnsToGo': torch.tensor(trajectory[0]['returnToGo'], dtype=torch.float)
     })
     
     if len(trainingData.keys()) == 0:
@@ -222,7 +222,7 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
 
 
 if __name__ == "__main__":
-    noTrajectories = 60000
+    noTrajectories = 64
     trainingData = TensorDict({})
     
     

@@ -128,7 +128,7 @@ class DecisionTransformerTrainer(Trainer):
                 end_idx = min(start_idx + batch, self.trainStrategy.lengthData)
                 batch_indices = torch.arange(start_idx, end_idx)
                 test_problem = all_problem_data[batch_indices]
-                real_benefits = test_problem["benefit"]
+                real_benefits = test_problem["benefit"][-1]
                 test_td = {k: v.clone() for k, v in test_problem.items()}
                 test_td = {k: v.to(self.device) for k, v in test_td.items()}
                 test_td["returnsToGo"] = torch.zeros((batch), device=self.device)
@@ -137,7 +137,7 @@ class DecisionTransformerTrainer(Trainer):
 
                 for step in range(trajectory_length):
                     test_td = self.model.forward(test_td, nextOrderQuantity=None, is_test=True, update_only=False)
-                all_test_benefits.append(test_td["benefit"].cpu())
+                all_test_benefits.append(test_td["benefit"][-1].cpu())
                 all_real_benefits.append(real_benefits)
         self.model.train()
         test_mean = torch.cat(all_test_benefits).mean().item()
@@ -325,9 +325,9 @@ if __name__ == "__main__":
         )
         
         config = TrainerConfig(
-            nBatch=64,
+            nBatch=32,
             nVal=1000, 
-            stepsPerEpoch=64000//64,
+            stepsPerEpoch=2,
             trainStrategy=DTTrainingStrategy(dataPath=data_paths),
             lr_scheduler=lr_scheduler,
             optimizer=optimizer

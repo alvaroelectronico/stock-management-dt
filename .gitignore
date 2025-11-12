@@ -8,3 +8,5 @@ logger/__pycache__
 *.png
 *.json
 *.md
+*.txt
+*.html
