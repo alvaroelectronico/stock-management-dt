@@ -328,6 +328,7 @@ class DecisionTransformer(nn.Module):
         predictedActionScaled = self.softplus(predictedActionScaled)
         
         predictedAction = self._unscale_field(predictedActionScaled, "orderQuantity")
+        predictedAction = torch.ceil(predictedAction).long().float()
         td["predictedAction"] = predictedAction
         td["predictedOrderDecision"] = orderAction
         
@@ -446,8 +447,8 @@ class DecisionTransformer(nn.Module):
                 orderAction = self.sigmoid(orderAction)
                 predictedActionScaled = self.softplus(predictedActionScaled) * (orderAction >= 0.5)
                 
-                # Desescalar predicción antes de guardarla
                 predictedAction = self._unscale_field(predictedActionScaled, "orderQuantity")
+                predictedAction = torch.ceil(predictedAction).long().float()
                 orderQuantity = predictedAction
             else:
                 predictedAction = torch.zeros(batchSize, 1, device=self.device)
