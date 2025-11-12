@@ -168,7 +168,6 @@ def tryDecisionTransformer(model, problem, maxSteps=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     td = model.initModel(td)
     
-    
     results = []
     
     for step in range(maxSteps):
