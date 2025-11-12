@@ -328,7 +328,6 @@ class DecisionTransformer(nn.Module):
         predictedActionScaled = self.softplus(predictedActionScaled)
         
         predictedAction = self._unscale_field(predictedActionScaled, "orderQuantity")
-        predictedAction = torch.ceil(predictedAction).long().float()
         td["predictedAction"] = predictedAction
         td["predictedOrderDecision"] = orderAction
         
