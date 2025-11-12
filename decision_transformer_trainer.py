@@ -1,5 +1,5 @@
 from torch import nn
-from decision_transformer_original import DecisionTransformer
+from decision_transformer_improved import DecisionTransformer
 from trainer import Trainer, TrainerConfig
 import torch
 from decision_transformer_strategies import TrainingStrategy
@@ -114,6 +114,36 @@ class DecisionTransformerTrainer(Trainer):
     def saveModel(self):
         super().saveModel()
 
+    def evaluate_benefits(self):
+        batch = 1
+        
+        self.model.eval()
+        all_test_benefits = []
+        all_real_benefits = []
+        with torch.no_grad():
+            all_problem_data = self.trainStrategy.problemData
+            num_batches = (self.trainStrategy.lengthData + batch - 1) // batch
+            for i in range(num_batches):
+                start_idx = i * batch
+                end_idx = min(start_idx + batch, self.trainStrategy.lengthData)
+                batch_indices = torch.arange(start_idx, end_idx)
+                test_problem = all_problem_data[batch_indices]
+                real_benefits = test_problem["benefit"]
+                test_td = {k: v.clone() for k, v in test_problem.items()}
+                test_td = {k: v.to(self.device) for k, v in test_td.items()}
+                test_td["returnsToGo"] = torch.zeros((batch), device=self.device)
+                test_td = self.model.initModel(test_td)
+                trajectory_length = test_td['demand'].size(1)
+                
+                for step in range(trajectory_length):
+                    test_td = self.model.forward(test_td, nextOrderQuantity=None, is_test=True, update_only=False)
+                all_test_benefits.append(test_td["benefit"].cpu())
+                all_real_benefits.append(real_benefits)
+        self.model.train()
+        test_mean = torch.cat(all_test_benefits).mean().item()
+        real_mean = torch.cat(all_real_benefits).mean().item()
+        return test_mean, real_mean
+
     def train(self):
         epoch = getattr(self, 'currentEpoch', -1) + 1
 
@@ -200,6 +230,8 @@ class DecisionTransformerTrainer(Trainer):
             
             self.lr_scheduler.step()
             
+            test_benefit, real_benefit = self.evaluate_benefits()
+            
             validation_loss, cost_metrics = 0, 0
             self.training_metrics['validation_losses'].append(validation_loss)
             self.training_metrics['validation_cost_metrics'].append(cost_metrics)
@@ -221,7 +253,9 @@ class DecisionTransformerTrainer(Trainer):
             self.updateTrackFile()
             
             epoch_time = time.time() - epoch_start_time
-            print(f"Epoch {epoch} completada - Tiempo: {epoch_time:.2f} segundos")
+            test_benefit_str = f" | Test benefit: {test_benefit:.2f}" if test_benefit is not None else ""
+            real_benefit_str = f" | Real benefit: {real_benefit:.2f}" if real_benefit is not None else ""
+            print(f"Epoch {epoch} completada - Tiempo: {epoch_time:.2f} segundos{test_benefit_str}{real_benefit_str}")
             
             self.currentEpoch = epoch
             self.saveModel()
@@ -293,7 +327,7 @@ if __name__ == "__main__":
         config = TrainerConfig(
             nBatch=64,
             nVal=1000, 
-            stepsPerEpoch=64000//64*5,
+            stepsPerEpoch=2//2*4,
             trainStrategy=DTTrainingStrategy(dataPath=data_paths),
             lr_scheduler=lr_scheduler,
             optimizer=optimizer

@@ -189,7 +189,7 @@ class DecisionTransformer(nn.Module):
         tdNew["stockOutPenalty"] = td["stockOutPenalty"]
         tdNew["unitRevenue"] = td["unitRevenue"]
         tdNew["leadTime"] = td["leadTime"]
-        tdNew["benefit"] = torch.zeros(batchSize, RETURN_TO_GO_WINDOW, dtype=torch.float32, device=device)
+        tdNew["benefit"] = torch.zeros((batchSize, 1), dtype=torch.float32, device=device)
         tdNew["returnsToGo"] = td["returnsToGo"]
         tdNew["predictedAction"] = torch.zeros(batchSize, 1, dtype=torch.float32, device=device)
         tdNew["demand"] = td["demand"]
@@ -496,12 +496,7 @@ class DecisionTransformer(nn.Module):
         stockoutPenalty = (td["stockOutPenalty"].unsqueeze(-1) * stockout)
 
         benefitUpdate = (income - holdingCost - stockoutPenalty - orderingCost).float()
-
-        if currentTimeStep[0].item() >= RETURN_TO_GO_WINDOW:
-            td["benefit"] = torch.roll(td["benefit"], shifts=-1, dims=-1)
-            td["benefit"][..., -1] = benefitUpdate.squeeze(-1)
-        else:
-            td["benefit"][..., currentTimeStep] = benefitUpdate
+        td["benefit"] = td["benefit"] + benefitUpdate
 
         td["forecast"] = torch.roll(td["forecast"], shifts=-1, dims=1)
         td["demand"] = torch.roll(td["demand"], shifts=-1, dims=-1)

@@ -337,7 +337,7 @@ if __name__ == "__main__":
         report = runDecisionTransformerTest(
             modelPath=modelPath,
             dataPath=dataPath,
-            problemIndex=2,
+            problemIndex=0,
             maxSteps=30,
             outputPath=outputPath,
             plotOutputPath=plotOutputPath

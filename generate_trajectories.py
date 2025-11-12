@@ -79,7 +79,7 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
     totalOrderingCost = 0
     totalStockOutCost = 0
     totalIncome = 0
-    totalBenefit = np.zeros(trajectoryLength)
+    totalBenefit = 0
 
     demand_mean = np.random.uniform(MIN_DEMAND_MEAN, MAX_DEMAND_MEAN)
     demand_std = np.random.uniform(MIN_DEMAND_STD, MAX_DEMAND_STD)
@@ -146,12 +146,13 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
         onHandLevel = max(0, int(onHandLevel - currentDemand))
         
         if startRecording:
-            totalBenefit[stepsRecorded] = totalIncome - totalHoldingCost - totalStockOutCost - totalOrderingCost
+            totalBenefit += totalIncome - totalHoldingCost - totalStockOutCost - totalOrderingCost
             
             trajectory.append({
                 'state': state, 
                 'action': current_order_quantity,
-                'returnToGo': 0.0
+                'returnToGo': 0.0,
+                'benefit': totalBenefit
             })
             
             stepsRecorded += 1
@@ -165,13 +166,13 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
     
     for i in range(stepsRecorded):
         if i >= RETURN_TO_GO_WINDOW:
-            BenefitToAdd = totalBenefit[i-RETURN_TO_GO_WINDOW] - totalBenefit[i-RETURN_TO_GO_WINDOW-1]
-            benefitToSubstract = totalBenefit[i] - totalBenefit[i-1]
-            returnToGo = (reward*RETURN_TO_GO_WINDOW + BenefitToAdd - benefitToSubstract) / RETURN_TO_GO_WINDOW
-            trajectory[i]['returnToGo'] = returnToGo
+            #BenefitToAdd = totalBenefit[i-RETURN_TO_GO_WINDOW] - totalBenefit[i-RETURN_TO_GO_WINDOW-1]
+            #benefitToSubstract = totalBenefit[i] - totalBenefit[i-1]
+            #returnToGo = (reward*RETURN_TO_GO_WINDOW + BenefitToAdd - benefitToSubstract) / RETURN_TO_GO_WINDOW
+            #trajectory[i]['returnToGo'] = returnToGo
             trajectory[i]['returnToGo'] = 0
         else:
-            trajectory[i]['returnToGo'] = reward
+            #trajectory[i]['returnToGo'] = reward
             trajectory[i]['returnToGo'] = 0
 
         
@@ -207,7 +208,8 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
             'timesStep': torch.stack([torch.tensor(t['state']['timesStep'], dtype=torch.float) for t in trajectory]),
         }),
         'actions': torch.stack([torch.tensor(t['action'], dtype=torch.float) for t in trajectory]),
-        'returnsToGo': torch.tensor(trajectory[0]['returnToGo'], dtype=torch.float)
+        'returnsToGo': torch.tensor(trajectory[0]['returnToGo'], dtype=torch.float),
+        'benefit': torch.tensor(trajectory[-1]['benefit'], dtype=torch.float)
     })
     
     if len(trainingData.keys()) == 0:
@@ -220,7 +222,7 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
 
 
 if __name__ == "__main__":
-    noTrajectories = 15000*4
+    noTrajectories = 2
     trainingData = TensorDict({})
     
     

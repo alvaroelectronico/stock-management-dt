@@ -29,6 +29,7 @@ class DTTrainingStrategy(TrainingStrategy):
         allProblemData = []
         allOrderQuantityData = []
         allReturnsToGoData = []
+        allBenefitData = []
 
         for i, path in enumerate(self.dataPath):
             element = torch.load(path, weights_only=False)
@@ -36,8 +37,11 @@ class DTTrainingStrategy(TrainingStrategy):
             allProblemData.append(element["states"])
             allOrderQuantityData.append(element["actions"])
             allReturnsToGoData.append(element["returnsToGo"])
-
+            allBenefitData.append(element["benefit"])
+            
         self.problemData = torch.cat(allProblemData, dim=0)
+        self.problemData["benefit"] = torch.cat(allBenefitData, dim=0)
+        print(self.problemData)
         self.orderQuantityData = torch.cat(allOrderQuantityData, dim=0)
         self.returnsToGoData = torch.cat(allReturnsToGoData, dim=0)
 
