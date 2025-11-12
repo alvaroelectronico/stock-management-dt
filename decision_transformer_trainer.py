@@ -115,14 +115,14 @@ class DecisionTransformerTrainer(Trainer):
         super().saveModel()
 
     def evaluate_benefits(self):
-        batch = 1
-        
+        batch = self.nBatch
+
         self.model.eval()
         all_test_benefits = []
         all_real_benefits = []
         with torch.no_grad():
             all_problem_data = self.trainStrategy.problemData
-            num_batches = (self.trainStrategy.lengthData + batch - 1) // batch
+            num_batches = (self.trainStrategy.lengthData) // batch
             for i in range(num_batches):
                 start_idx = i * batch
                 end_idx = min(start_idx + batch, self.trainStrategy.lengthData)
@@ -134,7 +134,7 @@ class DecisionTransformerTrainer(Trainer):
                 test_td["returnsToGo"] = torch.zeros((batch), device=self.device)
                 test_td = self.model.initModel(test_td)
                 trajectory_length = test_td['demand'].size(1)
-                
+
                 for step in range(trajectory_length):
                     test_td = self.model.forward(test_td, nextOrderQuantity=None, is_test=True, update_only=False)
                 all_test_benefits.append(test_td["benefit"].cpu())
@@ -231,7 +231,7 @@ class DecisionTransformerTrainer(Trainer):
             self.lr_scheduler.step()
             
             test_benefit, real_benefit = self.evaluate_benefits()
-            
+
             validation_loss, cost_metrics = 0, 0
             self.training_metrics['validation_losses'].append(validation_loss)
             self.training_metrics['validation_cost_metrics'].append(cost_metrics)
@@ -327,7 +327,7 @@ if __name__ == "__main__":
         config = TrainerConfig(
             nBatch=64,
             nVal=1000, 
-            stepsPerEpoch=2//2*4,
+            stepsPerEpoch=64000//64,
             trainStrategy=DTTrainingStrategy(dataPath=data_paths),
             lr_scheduler=lr_scheduler,
             optimizer=optimizer

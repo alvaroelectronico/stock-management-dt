@@ -222,7 +222,7 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
 
 
 if __name__ == "__main__":
-    noTrajectories = 2
+    noTrajectories = 60000
     trainingData = TensorDict({})
     
     
