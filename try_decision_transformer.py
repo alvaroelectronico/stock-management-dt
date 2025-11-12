@@ -137,7 +137,8 @@ def getTestProblem(dataPath, problemIndex=0):
         'returnsToGo': returnsToGoData.unsqueeze(0),
         'realActions': actionsData.unsqueeze(0),
         'realReturnsToGo': returnsToGoData,
-        'realBenefits': problemData['benefit'].unsqueeze(0) if 'benefit' in problemData else None
+        'realBenefits': problemData['benefit'].unsqueeze(0) if 'benefit' in problemData else None,
+        'realCumulativeSales': problemData['cumulativeSales'].unsqueeze(0) if 'cumulativeSales' in problemData else None
     })
 
     return problem
@@ -167,6 +168,7 @@ def tryDecisionTransformer(model, problem, maxSteps=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     td = model.initModel(td)
     
+    
     results = []
     
     for step in range(maxSteps):
@@ -181,6 +183,9 @@ def tryDecisionTransformer(model, problem, maxSteps=None):
         
         predictedBenefit = td['benefit'][0, -1].item() if 'benefit' in td and td['benefit'].size(1) > 0 else 0.0
         realBenefit = problem['realBenefits'][0, step].item() if problem.get('realBenefits') is not None else None
+        
+        predictedCumulativeSales = td['cumulativeSales'][0, -1].item() if 'cumulativeSales' in td and td['cumulativeSales'].size(1) > 0 else 0.0
+        realCumulativeSales = problem['realCumulativeSales'][0, step].item() if problem.get('realCumulativeSales') is not None else 0.0
         
         currentState = {
             'onHandLevel': td['onHandLevel'][0].item(),
@@ -212,6 +217,8 @@ def tryDecisionTransformer(model, problem, maxSteps=None):
             'actionAccuracy': 1.0 - min(actionError, 1.0),
             'predictedBenefit': predictedBenefit,
             'realBenefit': realBenefit,
+            'predictedCumulativeSales': predictedCumulativeSales,
+            'realCumulativeSales': realCumulativeSales,
         }
         
         results.append(stepResult)
@@ -258,14 +265,15 @@ def generateTestReport(results, outputPath=None):
 
 def createCombinedPlots(results, outputPath=None):
     fig = make_subplots(
-        rows=3, cols=1,
+        rows=4, cols=1,
         subplot_titles=(
             'Comparación: Acciones Reales vs Decision Transformer',
             'Comparación: Benefits Reales vs Decision Transformer',
-            'Inventario Disponible vs Demanda por Paso'
+            'Inventario Disponible vs Demanda por Paso',
+            'Unidades Vendidas Acumuladas: Real vs Decision Transformer'
         ),
         vertical_spacing=0.08,
-        row_heights=[0.33, 0.33, 0.34]
+        row_heights=[0.25, 0.25, 0.25, 0.25]
     )
     
     steps = [r['step'] for r in results]
@@ -299,12 +307,22 @@ def createCombinedPlots(results, outputPath=None):
     fig.add_trace(go.Scatter(x=steps, y=demands, mode='lines+markers', name='Demanda',
                              line=dict(color='orange', width=2, dash='dash'), marker=dict(size=4, symbol='square')), row=3, col=1)
     
+    # Agregar gráfica de unidades vendidas acumuladas
+    realCumulativeSales = [r['realCumulativeSales'] for r in results]
+    predictedCumulativeSales = [r['predictedCumulativeSales'] for r in results]
+    fig.add_trace(go.Scatter(x=steps, y=realCumulativeSales, mode='lines+markers', name='Ventas Acumuladas Real',
+                             line=dict(color='blue', width=2), marker=dict(size=4, symbol='circle')), row=4, col=1)
+    fig.add_trace(go.Scatter(x=steps, y=predictedCumulativeSales, mode='lines+markers', name='Ventas Acumuladas Predichas (DT)',
+                             line=dict(color='red', width=2, dash='dash'), marker=dict(size=4, symbol='square')), row=4, col=1)
+    
     fig.update_xaxes(title_text='Paso', row=1, col=1)
     fig.update_xaxes(title_text='Paso', row=2, col=1)
     fig.update_xaxes(title_text='Paso', row=3, col=1)
+    fig.update_xaxes(title_text='Paso', row=4, col=1)
     fig.update_yaxes(title_text='Cantidad a Ordenar', row=1, col=1)
     fig.update_yaxes(title_text='Benefit Acumulado', row=2, col=1)
     fig.update_yaxes(title_text='Cantidad', row=3, col=1)
+    fig.update_yaxes(title_text='Unidades Vendidas', row=4, col=1)
     
     fig.add_annotation(text=f'Error Promedio: {avgError:.3f}<br>Precisión Promedio: {avgAccuracy:.3f}',
                        xref='paper', yref='paper', x=0.02, y=0.98, xanchor='left', yanchor='top',
@@ -338,13 +356,25 @@ def createCombinedPlots(results, outputPath=None):
                        bgcolor='rgba(245, 222, 179, 0.8)', bordercolor='rgba(0, 0, 0, 0.5)', borderwidth=1,
                        row=3, col=1)
     
-    fig.update_layout(height=2400, showlegend=True, hovermode='x unified')
+    # Anotación para la gráfica de ventas acumuladas
+    totalRealSales = realCumulativeSales[-1] if realCumulativeSales else 0
+    totalPredictedSales = predictedCumulativeSales[-1] if predictedCumulativeSales else 0
+    salesDifference = abs(totalRealSales - totalPredictedSales)
+    salesError = salesDifference / max(totalRealSales, 1e-6) if totalRealSales > 0 else salesDifference
+    annotationText = f'Ventas Totales Real: {totalRealSales:.2f}<br>Ventas Totales Predichas: {totalPredictedSales:.2f}<br>Diferencia: {salesDifference:.2f}<br>Error Relativo: {salesError*100:.2f}%'
+    
+    fig.add_annotation(text=annotationText, xref='paper', yref='paper', x=0.02, y=0.98,
+                       xanchor='left', yanchor='top', showarrow=False, font=dict(size=10), align='left',
+                       bgcolor='rgba(245, 222, 179, 0.8)', bordercolor='rgba(0, 0, 0, 0.5)', borderwidth=1,
+                       row=4, col=1)
+    
+    fig.update_layout(height=3200, showlegend=True, hovermode='x unified')
     
     if outputPath:
         if outputPath.endswith('.html'):
             fig.write_html(outputPath)
         else:
-            fig.write_image(outputPath, width=1200, height=2400, scale=2)
+            fig.write_image(outputPath, width=1200, height=3200, scale=2)
     
     fig.show()
     

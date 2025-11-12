@@ -83,6 +83,7 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
     totalStockOutCost = 0
     totalIncome = 0
     totalBenefit = 0
+    cumulativeSales = 0
 
     demand_mean = np.random.uniform(MIN_DEMAND_MEAN, MAX_DEMAND_MEAN)
     demand_std = np.random.uniform(MIN_DEMAND_STD, MAX_DEMAND_STD)
@@ -146,13 +147,16 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
         if startRecording:
             totalHoldingCost += holdingCost * onHandLevel
             totalStockOutCost += stockOutPenalty * max(0, currentDemand - onHandLevel)
-            totalIncome += unitRevenue * min(currentDemand, onHandLevel)
+            sales = min(currentDemand, onHandLevel)
+            totalIncome += unitRevenue * sales
+            cumulativeSales += sales
         
         onHandLevel = max(0, int(onHandLevel - currentDemand))
         
         if startRecording:
             totalBenefit = totalIncome - totalHoldingCost - totalStockOutCost - totalOrderingCost
             state["benefit"] = totalBenefit
+            state["cumulativeSales"] = cumulativeSales
             
             trajectory.append({
                 'state': state, 
@@ -211,7 +215,8 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
             'stockOutPenalty': torch.tensor(first_state['stockOutPenalty'], dtype=torch.float),
             'unitRevenue': torch.tensor(first_state['unitRevenue'], dtype=torch.float),
             'timesStep': torch.stack([torch.tensor(t['state']['timesStep'], dtype=torch.float) for t in trajectory]),
-            'benefit': torch.tensor([t['state']['benefit'] for t in trajectory], dtype=torch.float)
+            'benefit': torch.tensor([t['state']['benefit'] for t in trajectory], dtype=torch.float),
+            'cumulativeSales': torch.tensor([t['state']['cumulativeSales'] for t in trajectory], dtype=torch.float)
         }),
         'actions': torch.stack([torch.tensor(t['action'], dtype=torch.float) for t in trajectory]),
         'returnsToGo': torch.tensor(trajectory[0]['returnToGo'], dtype=torch.float)

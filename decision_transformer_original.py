@@ -152,6 +152,7 @@ class DecisionTransformer(nn.Module):
         tdNew["unitRevenue"] = td["unitRevenue"]
         tdNew["leadTime"] = td["leadTime"]
         tdNew["benefit"] = torch.zeros((batchSize, 1), dtype=torch.float32)
+        tdNew["cumulativeSales"] = torch.zeros((batchSize, 0), dtype=torch.float32)
         tdNew["returnsToGo"] = td["returnsToGo"]
         tdNew["predictedAction"] = torch.zeros(batchSize, 1, dtype=torch.float32)
         tdNew["demand"] = td["demand"]
@@ -338,6 +339,12 @@ class DecisionTransformer(nn.Module):
         sales = torch.minimum(current_demand, current_stock)
         stockout = torch.clamp(current_demand - current_stock, min=0).unsqueeze(-1)
         income = (td["unitRevenue"] * sales).unsqueeze(-1)
+        
+        # Actualizar ventas acumuladas
+        if td["cumulativeSales"].size(1) == 0:
+            td["cumulativeSales"] = sales.unsqueeze(-1)
+        else:
+            td["cumulativeSales"] = torch.cat((td["cumulativeSales"], td["cumulativeSales"][:, -1].unsqueeze(-1) + sales), dim=1)
         
         td["onHandLevel"] = current_stock - sales
         orderingCost = torch.where(
