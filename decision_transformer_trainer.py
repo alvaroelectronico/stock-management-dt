@@ -85,6 +85,9 @@ class DecisionTransformerTrainer(Trainer):
 
     def __init__(self, savePath, name, model, trainerConfig):
         super().__init__(savePath, name, model, trainerConfig)
+        self.testStrategy = None
+        if hasattr(trainerConfig, 'testDataPath') and trainerConfig.testDataPath is not None:
+            self.testStrategy = DTTrainingStrategy(dataPath=trainerConfig.testDataPath, shuffle=False)
 
     def createModel(self):
         """
@@ -121,11 +124,17 @@ class DecisionTransformerTrainer(Trainer):
         all_test_benefits = []
         all_real_benefits = []
         with torch.no_grad():
-            all_problem_data = self.trainStrategy.problemData
-            num_batches = (self.trainStrategy.lengthData) // batch
+            if self.testStrategy is not None:
+                all_problem_data = self.testStrategy.problemData
+                length_data = self.testStrategy.lengthData
+            else:
+                all_problem_data = self.trainStrategy.problemData
+                length_data = self.trainStrategy.lengthData
+            
+            num_batches = length_data // batch
             for i in range(num_batches):
                 start_idx = i * batch
-                end_idx = min(start_idx + batch, self.trainStrategy.lengthData)
+                end_idx = min(start_idx + batch, length_data)
                 batch_indices = torch.arange(start_idx, end_idx)
                 test_problem = all_problem_data[batch_indices]
                 real_benefits = test_problem["benefit"][-1]
@@ -330,7 +339,8 @@ if __name__ == "__main__":
             stepsPerEpoch=2,
             trainStrategy=DTTrainingStrategy(dataPath=data_paths),
             lr_scheduler=lr_scheduler,
-            optimizer=optimizer
+            optimizer=optimizer,
+            testDataPath=["data/test_data.pt"]
         )
         trainer = DecisionTransformerTrainer(
             savePath="./training_models/",  # Cambiado a training_models

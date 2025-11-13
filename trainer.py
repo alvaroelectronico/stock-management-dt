@@ -32,7 +32,7 @@ def checkCompileSupport():
 
 class TrainerConfig:
 
-    def __init__(self, nBatch, nVal, stepsPerEpoch, trainStrategy=None, optimizer=None, lr_scheduler=None):
+    def __init__(self, nBatch, nVal, stepsPerEpoch, trainStrategy=None, optimizer=None, lr_scheduler=None, testDataPath=None):
         
         if trainStrategy is None:
             trainStrategy = {
@@ -47,6 +47,7 @@ class TrainerConfig:
         self.trainStrategy = trainStrategy
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
+        self.testDataPath = testDataPath
     
     def to_dict(self):
        dict = {
