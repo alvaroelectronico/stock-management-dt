@@ -1,4 +1,5 @@
 import torch
+import math
 from generate_trajectories import generateInstanceData, generateTrajectory, addTrajectoryToTrainingData
 from abc import abstractmethod
 from tensordict import TensorDict
@@ -11,28 +12,25 @@ class TrainingStrategy:
     def getTrainingData(self, batchSize):
         return None
 
-
 class DTTrainingStrategy(TrainingStrategy):
 
-    def __init__(self, dataPath: list, shuffle=True):
+    def __init__(self, dataPath : list, shuffle=True):
         """
         Inicializa la estrategia de entrenamiento.
         
         Args:
             dataPath: Lista de rutas a los archivos de datos de entrenamiento
             shuffle: Si True, mezcla los datos
-            num_workers: Número de workers para carga paralela (0 = sin workers)
-            pin_memory: Si True, usa memoria pinned para transferencias GPU más rápidas
         """
         super().__init__()
         self.shuffle = shuffle
         self.dataPath = dataPath
-        
+
         allProblemData = []
         allOrderQuantityData = []
         allReturnsToGoData = []
 
-        for path in dataPath:
+        for i, path in enumerate(self.dataPath):
             element = torch.load(path, weights_only=False)
             
             allProblemData.append(element["states"])
@@ -50,23 +48,12 @@ class DTTrainingStrategy(TrainingStrategy):
         self.resetData()
     
     def resetData(self):
-        """
-        Reinicia los índices y mezcla los datos si es necesario.
-        """
         if self.shuffle:
             self.dataIndices = self.dataIndices[torch.randperm(self.lengthData)]
         self.currentIndex = 0
 
     def getTrainingData(self, batchSize):
-        """
-        Obtiene el siguiente batch de datos de entrenamiento.
-        
-        Args:
-            batchSize: Tamaño del batch
-            
-        Returns:
-            Tupla con (estados, acciones, returns-to-go)
-        """
+ 
         startIndex = self.currentIndex
         endIndex = startIndex + batchSize
         if endIndex > self.lengthData:
@@ -81,7 +68,8 @@ class DTTrainingStrategy(TrainingStrategy):
         if self.currentIndex >= self.lengthData:
             self.resetData()
 
-        return (batch, orderQuantity, returnsToGo)
+
+        return (batch.clone(), orderQuantity.clone(), returnsToGo.clone())
     
     def getValidationData(self, batchSize):
         """
