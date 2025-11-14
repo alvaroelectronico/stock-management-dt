@@ -83,7 +83,7 @@ class DecisionTransformerConfig(PretrainedConfig):
             vocab_size=1,
             n_positions=1024,
             n_layer=3,
-            n_head=1,
+            n_head=8,
             n_inner=None,
             activation_function="relu",
             resid_pdrop=0.1,

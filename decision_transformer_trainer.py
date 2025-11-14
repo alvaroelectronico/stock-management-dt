@@ -249,24 +249,45 @@ class DecisionTransformerTrainer(Trainer):
                     td = self.model.forward(td, nextOrderQuantity=orderQuantityData[:, cont].unsqueeze(-1), is_test=False, update_only=cont<window_start)
                     cont += 1
 
-
-                self.model.non_constructive_forward(td)
-                predictedAction = td["predictedAction"]
-                predictedOrderDecision = td["predictedOrderDecision"]
-                realActions = orderQuantityData[:, window_start:window_end]
-                
-                realOrderDecision = (realActions > 0).float()
-                
-                decisionLoss = nn.BCEWithLogitsLoss()(predictedOrderDecision.squeeze(-1), realOrderDecision)
-                
-                predictedActionScaled = self.model._scale_field(predictedAction.squeeze(-1), "orderQuantity")
-                realActionsScaled = self.model._scale_field(realActions, "orderQuantity")
-                
-                orderMask = (realActions > 0).float()
-                quantityLoss = nn.MSELoss(reduction='none')(predictedActionScaled, realActionsScaled)
-                quantityLoss = (quantityLoss * orderMask).sum() / (orderMask.sum() + 1e-8)
-                
-                loss = decisionLoss + quantityLoss
+                if self.trainerConfig.use_bfloat16 and self.device.type == "cuda":
+                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                        self.model.non_constructive_forward(td)
+                        
+                        predictedAction = td["predictedAction"]
+                        predictedOrderDecision = td["predictedOrderDecision"]
+                        realActions = orderQuantityData[:, window_start:window_end]
+                        
+                        realOrderDecision = (realActions > 0).float()
+                        
+                        decisionLoss = nn.BCEWithLogitsLoss()(predictedOrderDecision.squeeze(-1), realOrderDecision)
+                        
+                        predictedActionScaled = self.model._scale_field(predictedAction.squeeze(-1), "orderQuantity")
+                        realActionsScaled = self.model._scale_field(realActions, "orderQuantity")
+                        
+                        orderMask = (realActions > 0).float()
+                        quantityLoss = nn.MSELoss(reduction='none')(predictedActionScaled, realActionsScaled)
+                        quantityLoss = (quantityLoss * orderMask).sum() / (orderMask.sum() + 1e-8)
+                        
+                        loss = decisionLoss + quantityLoss
+                else:
+                    self.model.non_constructive_forward(td)
+                    
+                    predictedAction = td["predictedAction"]
+                    predictedOrderDecision = td["predictedOrderDecision"]
+                    realActions = orderQuantityData[:, window_start:window_end]
+                    
+                    realOrderDecision = (realActions > 0).float()
+                    
+                    decisionLoss = nn.BCEWithLogitsLoss()(predictedOrderDecision.squeeze(-1), realOrderDecision)
+                    
+                    predictedActionScaled = self.model._scale_field(predictedAction.squeeze(-1), "orderQuantity")
+                    realActionsScaled = self.model._scale_field(realActions, "orderQuantity")
+                    
+                    orderMask = (realActions > 0).float()
+                    quantityLoss = nn.MSELoss(reduction='none')(predictedActionScaled, realActionsScaled)
+                    quantityLoss = (quantityLoss * orderMask).sum() / (orderMask.sum() + 1e-8)
+                    
+                    loss = decisionLoss + quantityLoss
 
                 loss.backward()
                 self.optimizer.step()

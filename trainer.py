@@ -32,8 +32,20 @@ def checkCompileSupport():
 
 class TrainerConfig:
 
-    def __init__(self, nBatch, nVal, stepsPerEpoch, trainStrategy=None, optimizer=None, lr_scheduler=None, testDataPath=None):
+    def __init__(self, nBatch, nVal, stepsPerEpoch, trainStrategy=None, optimizer=None, lr_scheduler=None, testDataPath=None, use_bfloat16=False):
+        """
+        Configuración del entrenador.
         
+        Args:
+            nBatch: Tamaño del batch
+            nVal: Tamaño de validación
+            stepsPerEpoch: Pasos por época
+            trainStrategy: Estrategia de entrenamiento
+            optimizer: Optimizador
+            lr_scheduler: Scheduler de learning rate
+            testDataPath: Ruta de datos de test
+            use_bfloat16: Si True, usa bfloat16 para non_constructive_forward, si False usa precisión completa
+        """
         if trainStrategy is None:
             trainStrategy = {
                 "strategy": "DTTrainingStrategy",
@@ -48,6 +60,7 @@ class TrainerConfig:
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
         self.testDataPath = testDataPath
+        self.use_bfloat16 = use_bfloat16
     
     def to_dict(self):
        dict = {
@@ -55,6 +68,7 @@ class TrainerConfig:
            "nVal": self.nVal,
            "stepsPerEpoch": self.stepsPerEpoch,
            "trainStrategy": self.trainStrategy,
+           "use_bfloat16": self.use_bfloat16,
        }
        return dict
 
@@ -109,6 +123,30 @@ class Trainer:
     def getModelConfig(self):
         pass
 
+    def getFilteredModelInfo(self):
+        """
+        Obtiene solo los campos relevantes de la configuración del modelo para guardar en track.json.
+        
+        Returns:
+            dict: Diccionario con solo los campos filtrados de la configuración del modelo
+        """
+        model_config = self.getModelConfig().__dict__
+        fields_to_keep = [
+            "hidden_size",
+            "n_layer",
+            "n_head",
+            "n_inner",
+            "activation_function",
+            "resid_pdrop",
+            "embd_pdrop",
+            "attn_pdrop",
+            "layer_norm_epsilon"
+        ]
+        filtered_info = {key: model_config.get(key) for key in fields_to_keep if key in model_config}
+        if hasattr(self.trainerConfig, 'use_bfloat16'):
+            filtered_info["use_bfloat16"] = self.trainerConfig.use_bfloat16
+        return filtered_info
+
     def initTraining(self):
 
         trackPath = self.trackPath
@@ -116,8 +154,8 @@ class Trainer:
         if not os.path.isfile(trackPath):
             print(" no existe")
             self.content = {
-                "NUMBER PARAMETERS": f"{sum(t.numel() for t in self.model.parameters()) / 1000 ** 2:.1f}M",
-                "MODEL INFO": self.getModelConfig().__dict__,
+                "NUMBER PARAMETERS": sum(t.numel() for t in self.model.parameters()),
+                "MODEL INFO": self.getFilteredModelInfo(),
                 "TRAINING INFO": self.trainerConfig.to_dict(),
                 "EPOCHS": {}
             }
@@ -165,8 +203,8 @@ class Trainer:
         try:
             if not os.path.exists(trackPath):
                 initial_content = {
-                    "NUMBER PARAMETERS": f"{sum(t.numel() for t in self.model.parameters()) / 1000 ** 2:.1f}M",
-                    "MODEL INFO": self.getModelConfig().__dict__,
+                    "NUMBER PARAMETERS": sum(t.numel() for t in self.model.parameters()),
+                    "MODEL INFO": self.getFilteredModelInfo(),
                     "TRAINING INFO": {
                         "nBatch": self.trainerConfig.nBatch,
                         "nVal": self.trainerConfig.nVal,
@@ -184,8 +222,8 @@ class Trainer:
                 
             if not content.strip():
                 initial_content = {
-                    "NUMBER PARAMETERS": f"{sum(t.numel() for t in self.model.parameters()) / 1000 ** 2:.1f}M",
-                    "MODEL INFO": self.getModelConfig().__dict__,
+                    "NUMBER PARAMETERS": sum(t.numel() for t in self.model.parameters()),
+                    "MODEL INFO": self.getFilteredModelInfo(),
                     "TRAINING INFO": {
                         "nBatch": self.trainerConfig.nBatch,
                         "nVal": self.trainerConfig.nVal,
@@ -206,8 +244,8 @@ class Trainer:
                 print("Creando nuevo archivo de seguimiento...")
                 
                 initial_content = {
-                    "NUMBER PARAMETERS": f"{sum(t.numel() for t in self.model.parameters()) / 1000 ** 2:.1f}M",
-                    "MODEL INFO": self.getModelConfig().__dict__,
+                    "NUMBER PARAMETERS": sum(t.numel() for t in self.model.parameters()),
+                    "MODEL INFO": self.getFilteredModelInfo(),
                     "TRAINING INFO": {
                         "nBatch": self.trainerConfig.nBatch,
                         "nVal": self.trainerConfig.nVal,
@@ -225,8 +263,8 @@ class Trainer:
             print("Creando nuevo archivo de seguimiento...")
             
             initial_content = {
-                "NUMBER PARAMETERS": f"{sum(t.numel() for t in self.model.parameters()) / 1000 ** 2:.1f}M",
-                "MODEL INFO": self.getModelConfig().__dict__,
+                "NUMBER PARAMETERS": sum(t.numel() for t in self.model.parameters()),
+                "MODEL INFO": self.getFilteredModelInfo(),
                 "TRAINING INFO": {
                     "nBatch": self.trainerConfig.nBatch,
                     "nVal": self.trainerConfig.nVal,
