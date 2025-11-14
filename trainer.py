@@ -32,7 +32,7 @@ def checkCompileSupport():
 
 class TrainerConfig:
 
-    def __init__(self, nBatch, nVal, stepsPerEpoch, trainStrategy=None, optimizer=None, lr_scheduler=None, testDataPath=None, use_bfloat16=False):
+    def __init__(self, nBatch, nVal, stepsPerEpoch, trainStrategy=None, optimizer=None, lr_scheduler=None, testDataPath=None, mixed_precision=None):
         """
         Configuración del entrenador.
         
@@ -44,7 +44,7 @@ class TrainerConfig:
             optimizer: Optimizador
             lr_scheduler: Scheduler de learning rate
             testDataPath: Ruta de datos de test
-            use_bfloat16: Si True, usa bfloat16 para non_constructive_forward, si False usa precisión completa
+            mixed_precision: Tipo de precisión mixta. Puede ser None (precisión completa), "bfloat16" o "float16"
         """
         if trainStrategy is None:
             trainStrategy = {
@@ -60,7 +60,8 @@ class TrainerConfig:
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
         self.testDataPath = testDataPath
-        self.use_bfloat16 = use_bfloat16
+        self.mixed_precision = mixed_precision
+        self.use_bfloat16 = (mixed_precision == "bfloat16")
     
     def to_dict(self):
        dict = {
@@ -68,7 +69,7 @@ class TrainerConfig:
            "nVal": self.nVal,
            "stepsPerEpoch": self.stepsPerEpoch,
            "trainStrategy": self.trainStrategy,
-           "use_bfloat16": self.use_bfloat16,
+           "mixed_precision": self.mixed_precision,
        }
        return dict
 
@@ -143,8 +144,12 @@ class Trainer:
             "layer_norm_epsilon"
         ]
         filtered_info = {key: model_config.get(key) for key in fields_to_keep if key in model_config}
-        if hasattr(self.trainerConfig, 'use_bfloat16'):
-            filtered_info["use_bfloat16"] = self.trainerConfig.use_bfloat16
+        # Añadir información de precisión mixta del trainerConfig
+        if hasattr(self.trainerConfig, 'mixed_precision'):
+            filtered_info["mixed_precision"] = self.trainerConfig.mixed_precision
+        elif hasattr(self.trainerConfig, 'use_bfloat16'):
+            # Compatibilidad hacia atrás
+            filtered_info["mixed_precision"] = "bfloat16" if self.trainerConfig.use_bfloat16 else None
         return filtered_info
 
     def initTraining(self):

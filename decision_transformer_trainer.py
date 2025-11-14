@@ -88,6 +88,11 @@ class DecisionTransformerTrainer(Trainer):
         self.testStrategy = None
         if hasattr(trainerConfig, 'testDataPath') and trainerConfig.testDataPath is not None:
             self.testStrategy = DTTrainingStrategy(dataPath=trainerConfig.testDataPath, shuffle=False)
+        
+        self.scaler = None
+        if hasattr(trainerConfig, 'mixed_precision') and trainerConfig.mixed_precision == "float16":
+            if self.device.type == "cuda":
+                self.scaler = torch.cuda.amp.GradScaler()
 
     def createModel(self):
         """
@@ -114,8 +119,47 @@ class DecisionTransformerTrainer(Trainer):
     def getTrainingStrategyModule(self):
         return decision_transformer_strategies
 
+    def loadModelFromFile(self):
+        """
+        Carga el modelo incluyendo el estado del GradScaler si existe.
+        """
+        fileExists = os.path.isfile(self.trainingSavePath)
+        checkpoint = None
+        optimizer = self.trainerConfig.optimizer
+        lrScheduler = self.trainerConfig.lr_scheduler
+
+        if fileExists:
+            checkpoint = torch.load(self.trainingSavePath)
+            self.model.load_state_dict(checkpoint["model_state"])
+            optimizer.load_state_dict(checkpoint["optimizer_state"])
+            lrScheduler.load_state_dict(checkpoint["lr_scheduler_state"])
+            torch.set_rng_state(checkpoint["rng_state"])
+            self.currentEpoch = checkpoint["start_epochs"]
+            if torch.cuda.is_available():
+                torch.cuda.set_rng_state(checkpoint["cuda_rng_state"])
+            
+            if "scaler_state" in checkpoint and self.scaler is not None:
+                self.scaler.load_state_dict(checkpoint["scaler_state"])
+
+        return checkpoint, optimizer, lrScheduler
+
     def saveModel(self):
-        super().saveModel()
+        """
+        Guarda el modelo incluyendo el estado del GradScaler si existe.
+        """
+        checkpoint_data = {
+            'model_state': self.model.state_dict(),
+            'optimizer_state': self.optimizer.state_dict(),
+            'lr_scheduler_state': self.lr_scheduler.state_dict(),
+            'start_epochs': self.currentEpoch,
+            'rng_state': torch.get_rng_state(),
+            'cuda_rng_state': torch.cuda.get_rng_state() if torch.cuda.is_available() else 0,
+        }
+        
+        if self.scaler is not None:
+            checkpoint_data['scaler_state'] = self.scaler.state_dict()
+        
+        torch.save(checkpoint_data, self.trainingSavePath)
 
     def evaluate_benefits(self):
         """
@@ -249,8 +293,13 @@ class DecisionTransformerTrainer(Trainer):
                     td = self.model.forward(td, nextOrderQuantity=orderQuantityData[:, cont].unsqueeze(-1), is_test=False, update_only=cont<window_start)
                     cont += 1
 
-                if self.trainerConfig.use_bfloat16 and self.device.type == "cuda":
-                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                mixed_precision = getattr(self.trainerConfig, 'mixed_precision', None)
+                use_mixed_precision = mixed_precision in ["bfloat16", "float16"] and self.device.type == "cuda"
+                
+                if use_mixed_precision:
+                    dtype = torch.bfloat16 if mixed_precision == "bfloat16" else torch.float16
+                    
+                    with torch.autocast(device_type="cuda", dtype=dtype):
                         self.model.non_constructive_forward(td)
                         
                         predictedAction = td["predictedAction"]
@@ -289,9 +338,15 @@ class DecisionTransformerTrainer(Trainer):
                     
                     loss = decisionLoss + quantityLoss
 
-                loss.backward()
-                self.optimizer.step()
-                self.optimizer.zero_grad()
+                if mixed_precision == "float16" and self.scaler is not None:
+                    self.scaler.scale(loss).backward()
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                    self.optimizer.zero_grad()
+                else:
+                    loss.backward()
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
                 
                 epochLoss += loss.detach().item()
                 
