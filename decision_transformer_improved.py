@@ -191,6 +191,9 @@ class DecisionTransformer(nn.Module):
         tdNew["leadTime"] = td["leadTime"]
         tdNew["benefit"] = torch.zeros((batchSize, 0, 1), dtype=torch.float32, device=device)
         tdNew["cumulativeSales"] = torch.zeros((batchSize, 0), dtype=torch.float32, device=device)
+        tdNew["cumulativeHoldingCost"] = torch.zeros((batchSize, 0, 1), dtype=torch.float32, device=device)
+        tdNew["cumulativeOrderingCost"] = torch.zeros((batchSize, 0, 1), dtype=torch.float32, device=device)
+        tdNew["cumulativeStockOutCost"] = torch.zeros((batchSize, 0, 1), dtype=torch.float32, device=device)
         tdNew["returnsToGo"] = td["returnsToGo"]
         tdNew["predictedAction"] = torch.zeros(batchSize, 1, dtype=torch.float32, device=device)
         tdNew["demand"] = td["demand"]
@@ -500,6 +503,21 @@ class DecisionTransformer(nn.Module):
         ).unsqueeze(-1)
 
         stockoutPenalty = (td["stockOutPenalty"].unsqueeze(-1) * stockout)
+
+        if td["cumulativeHoldingCost"].size(1) == 0:
+            td["cumulativeHoldingCost"] = holdingCost
+        else:
+            td["cumulativeHoldingCost"] = torch.cat((td["cumulativeHoldingCost"], td["cumulativeHoldingCost"][:, -1].unsqueeze(-1) + holdingCost), dim=1)
+        
+        if td["cumulativeOrderingCost"].size(1) == 0:
+            td["cumulativeOrderingCost"] = orderingCost
+        else:
+            td["cumulativeOrderingCost"] = torch.cat((td["cumulativeOrderingCost"], td["cumulativeOrderingCost"][:, -1].unsqueeze(-1) + orderingCost), dim=1)
+        
+        if td["cumulativeStockOutCost"].size(1) == 0:
+            td["cumulativeStockOutCost"] = stockoutPenalty
+        else:
+            td["cumulativeStockOutCost"] = torch.cat((td["cumulativeStockOutCost"], td["cumulativeStockOutCost"][:, -1].unsqueeze(-1) + stockoutPenalty), dim=1)
 
         benefitUpdate = (income - holdingCost - stockoutPenalty - orderingCost).float()
         if td["benefit"].size(1) == 0:

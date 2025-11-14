@@ -35,9 +35,6 @@ DEMAND_FORECAST_WINDOW = 10
 
 CSL = 0.95
 
-
-
-
 def generateInstanceData():
     """
     Genera datos aleatorios para una instancia del problema de inventario.
@@ -157,6 +154,9 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
             totalBenefit = totalIncome - totalHoldingCost - totalStockOutCost - totalOrderingCost
             state["benefit"] = totalBenefit
             state["cumulativeSales"] = cumulativeSales
+            state["cumulativeHoldingCost"] = totalHoldingCost
+            state["cumulativeOrderingCost"] = totalOrderingCost
+            state["cumulativeStockOutCost"] = totalStockOutCost
             
             trajectory.append({
                 'state': state, 
@@ -216,7 +216,10 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
             'unitRevenue': torch.tensor(first_state['unitRevenue'], dtype=torch.float),
             'timesStep': torch.stack([torch.tensor(t['state']['timesStep'], dtype=torch.float) for t in trajectory]),
             'benefit': torch.tensor([t['state']['benefit'] for t in trajectory], dtype=torch.float),
-            'cumulativeSales': torch.tensor([t['state']['cumulativeSales'] for t in trajectory], dtype=torch.float)
+            'cumulativeSales': torch.tensor([t['state']['cumulativeSales'] for t in trajectory], dtype=torch.float),
+            'cumulativeHoldingCost': torch.tensor([t['state']['cumulativeHoldingCost'] for t in trajectory], dtype=torch.float),
+            'cumulativeOrderingCost': torch.tensor([t['state']['cumulativeOrderingCost'] for t in trajectory], dtype=torch.float),
+            'cumulativeStockOutCost': torch.tensor([t['state']['cumulativeStockOutCost'] for t in trajectory], dtype=torch.float)
         }),
         'actions': torch.stack([torch.tensor(t['action'], dtype=torch.float) for t in trajectory]),
         'returnsToGo': torch.tensor(trajectory[0]['returnToGo'], dtype=torch.float)

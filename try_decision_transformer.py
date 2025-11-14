@@ -138,7 +138,10 @@ def getTestProblem(dataPath, problemIndex=0):
         'realActions': actionsData.unsqueeze(0),
         'realReturnsToGo': returnsToGoData,
         'realBenefits': problemData['benefit'].unsqueeze(0) if 'benefit' in problemData else None,
-        'realCumulativeSales': problemData['cumulativeSales'].unsqueeze(0) if 'cumulativeSales' in problemData else None
+        'realCumulativeSales': problemData['cumulativeSales'].unsqueeze(0) if 'cumulativeSales' in problemData else None,
+        'realCumulativeHoldingCost': problemData['cumulativeHoldingCost'].unsqueeze(0) if 'cumulativeHoldingCost' in problemData else None,
+        'realCumulativeOrderingCost': problemData['cumulativeOrderingCost'].unsqueeze(0) if 'cumulativeOrderingCost' in problemData else None,
+        'realCumulativeStockOutCost': problemData['cumulativeStockOutCost'].unsqueeze(0) if 'cumulativeStockOutCost' in problemData else None
     })
 
     return problem
@@ -186,6 +189,15 @@ def tryDecisionTransformer(model, problem, maxSteps=None):
         predictedCumulativeSales = td['cumulativeSales'][0, -1].item() if 'cumulativeSales' in td and td['cumulativeSales'].size(1) > 0 else 0.0
         realCumulativeSales = problem['realCumulativeSales'][0, step].item() if problem.get('realCumulativeSales') is not None else 0.0
         
+        predictedCumulativeHoldingCost = td['cumulativeHoldingCost'][0, -1].item() if 'cumulativeHoldingCost' in td and td['cumulativeHoldingCost'].size(1) > 0 else 0.0
+        realCumulativeHoldingCost = problem['realCumulativeHoldingCost'][0, step].item() if problem.get('realCumulativeHoldingCost') is not None else None
+        
+        predictedCumulativeOrderingCost = td['cumulativeOrderingCost'][0, -1].item() if 'cumulativeOrderingCost' in td and td['cumulativeOrderingCost'].size(1) > 0 else 0.0
+        realCumulativeOrderingCost = problem['realCumulativeOrderingCost'][0, step].item() if problem.get('realCumulativeOrderingCost') is not None else None
+        
+        predictedCumulativeStockOutCost = td['cumulativeStockOutCost'][0, -1].item() if 'cumulativeStockOutCost' in td and td['cumulativeStockOutCost'].size(1) > 0 else 0.0
+        realCumulativeStockOutCost = problem['realCumulativeStockOutCost'][0, step].item() if problem.get('realCumulativeStockOutCost') is not None else None
+        
         currentState = {
             'onHandLevel': td['onHandLevel'][0].item(),
             'inTransitStock': td['inTransitStock'][0].tolist(),
@@ -218,6 +230,12 @@ def tryDecisionTransformer(model, problem, maxSteps=None):
             'realBenefit': realBenefit,
             'predictedCumulativeSales': predictedCumulativeSales,
             'realCumulativeSales': realCumulativeSales,
+            'predictedCumulativeHoldingCost': predictedCumulativeHoldingCost,
+            'realCumulativeHoldingCost': realCumulativeHoldingCost,
+            'predictedCumulativeOrderingCost': predictedCumulativeOrderingCost,
+            'realCumulativeOrderingCost': realCumulativeOrderingCost,
+            'predictedCumulativeStockOutCost': predictedCumulativeStockOutCost,
+            'realCumulativeStockOutCost': realCumulativeStockOutCost,
         }
         
         results.append(stepResult)
@@ -264,15 +282,18 @@ def generateTestReport(results, outputPath=None):
 
 def createCombinedPlots(results, outputPath=None):
     fig = make_subplots(
-        rows=4, cols=1,
+        rows=7, cols=1,
         subplot_titles=(
             'Comparación: Acciones Reales vs Decision Transformer',
             'Comparación: Benefits Reales vs Decision Transformer',
             'Inventario Disponible vs Demanda por Paso',
-            'Unidades Vendidas Acumuladas: Real vs Decision Transformer'
+            'Unidades Vendidas Acumuladas: Real vs Decision Transformer',
+            'Coste de Mantenimiento Acumulado: Real vs Decision Transformer',
+            'Coste de Pedido Acumulado: Real vs Decision Transformer',
+            'Coste de Stockout Acumulado: Real vs Decision Transformer'
         ),
-        vertical_spacing=0.08,
-        row_heights=[0.25, 0.25, 0.25, 0.25]
+        vertical_spacing=0.05,
+        row_heights=[0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15]
     )
     
     steps = [r['step'] for r in results]
@@ -314,14 +335,18 @@ def createCombinedPlots(results, outputPath=None):
     fig.add_trace(go.Scatter(x=steps, y=predictedCumulativeSales, mode='lines+markers', name='Ventas Acumuladas Predichas (DT)',
                              line=dict(color='red', width=2, dash='dash'), marker=dict(size=4, symbol='square')), row=4, col=1)
     
-    fig.update_xaxes(title_text='Paso', row=1, col=1)
-    fig.update_xaxes(title_text='Paso', row=2, col=1)
-    fig.update_xaxes(title_text='Paso', row=3, col=1)
-    fig.update_xaxes(title_text='Paso', row=4, col=1)
+    # Actualizar ejes X
+    for i in range(1, 8):
+        fig.update_xaxes(title_text='Paso', row=i, col=1)
+    
+    # Actualizar ejes Y
     fig.update_yaxes(title_text='Cantidad a Ordenar', row=1, col=1)
     fig.update_yaxes(title_text='Benefit Acumulado', row=2, col=1)
     fig.update_yaxes(title_text='Cantidad', row=3, col=1)
     fig.update_yaxes(title_text='Unidades Vendidas', row=4, col=1)
+    fig.update_yaxes(title_text='Coste Acumulado', row=5, col=1)
+    fig.update_yaxes(title_text='Coste Acumulado', row=6, col=1)
+    fig.update_yaxes(title_text='Coste Acumulado', row=7, col=1)
     
     fig.add_annotation(text=f'Error Promedio: {avgError:.3f}<br>Precisión Promedio: {avgAccuracy:.3f}',
                        xref='paper', yref='paper', x=0.02, y=0.98, xanchor='left', yanchor='top',
@@ -367,13 +392,94 @@ def createCombinedPlots(results, outputPath=None):
                        bgcolor='rgba(245, 222, 179, 0.8)', bordercolor='rgba(0, 0, 0, 0.5)', borderwidth=1,
                        row=4, col=1)
     
-    fig.update_layout(height=3200, showlegend=True, hovermode='x unified')
+    # Gráfica de coste de mantenimiento acumulado
+    predictedCumulativeHoldingCost = [r['predictedCumulativeHoldingCost'] for r in results]
+    hasRealHoldingCost = any(r['realCumulativeHoldingCost'] is not None for r in results)
+    fig.add_trace(go.Scatter(x=steps, y=predictedCumulativeHoldingCost, mode='lines+markers', name='Holding Cost Predicho (DT)',
+                             line=dict(color='red', width=2, dash='dash'), marker=dict(size=4, symbol='square')), row=5, col=1)
+    
+    if hasRealHoldingCost:
+        validResults = [r for r in results if r['realCumulativeHoldingCost'] is not None]
+        realSteps = [r['step'] for r in validResults]
+        realCumulativeHoldingCost = [r['realCumulativeHoldingCost'] for r in validResults]
+        fig.add_trace(go.Scatter(x=realSteps, y=realCumulativeHoldingCost, mode='lines+markers', name='Holding Cost Real',
+                                 line=dict(color='blue', width=2), marker=dict(size=4, symbol='circle')), row=5, col=1)
+        
+        totalReal = realCumulativeHoldingCost[-1] if realCumulativeHoldingCost else 0
+        totalPredicted = predictedCumulativeHoldingCost[-1] if predictedCumulativeHoldingCost else 0
+        costDifference = abs(totalReal - totalPredicted)
+        costError = costDifference / max(totalReal, 1e-6) if totalReal > 0 else costDifference
+        annotationText = f'Coste Total Real: {totalReal:.2f}<br>Coste Total Predicho: {totalPredicted:.2f}<br>Diferencia: {costDifference:.2f}<br>Error Relativo: {costError*100:.2f}%'
+    else:
+        totalPredicted = predictedCumulativeHoldingCost[-1] if predictedCumulativeHoldingCost else 0
+        annotationText = f'Coste Total Predicho: {totalPredicted:.2f}'
+    
+    fig.add_annotation(text=annotationText, xref='paper', yref='paper', x=0.02, y=0.98,
+                       xanchor='left', yanchor='top', showarrow=False, font=dict(size=10), align='left',
+                       bgcolor='rgba(245, 222, 179, 0.8)', bordercolor='rgba(0, 0, 0, 0.5)', borderwidth=1,
+                       row=5, col=1)
+    
+    # Gráfica de coste de pedido acumulado
+    predictedCumulativeOrderingCost = [r['predictedCumulativeOrderingCost'] for r in results]
+    hasRealOrderingCost = any(r['realCumulativeOrderingCost'] is not None for r in results)
+    fig.add_trace(go.Scatter(x=steps, y=predictedCumulativeOrderingCost, mode='lines+markers', name='Ordering Cost Predicho (DT)',
+                             line=dict(color='red', width=2, dash='dash'), marker=dict(size=4, symbol='square')), row=6, col=1)
+    
+    if hasRealOrderingCost:
+        validResults = [r for r in results if r['realCumulativeOrderingCost'] is not None]
+        realSteps = [r['step'] for r in validResults]
+        realCumulativeOrderingCost = [r['realCumulativeOrderingCost'] for r in validResults]
+        fig.add_trace(go.Scatter(x=realSteps, y=realCumulativeOrderingCost, mode='lines+markers', name='Ordering Cost Real',
+                                 line=dict(color='blue', width=2), marker=dict(size=4, symbol='circle')), row=6, col=1)
+        
+        totalReal = realCumulativeOrderingCost[-1] if realCumulativeOrderingCost else 0
+        totalPredicted = predictedCumulativeOrderingCost[-1] if predictedCumulativeOrderingCost else 0
+        costDifference = abs(totalReal - totalPredicted)
+        costError = costDifference / max(totalReal, 1e-6) if totalReal > 0 else costDifference
+        annotationText = f'Coste Total Real: {totalReal:.2f}<br>Coste Total Predicho: {totalPredicted:.2f}<br>Diferencia: {costDifference:.2f}<br>Error Relativo: {costError*100:.2f}%'
+    else:
+        totalPredicted = predictedCumulativeOrderingCost[-1] if predictedCumulativeOrderingCost else 0
+        annotationText = f'Coste Total Predicho: {totalPredicted:.2f}'
+    
+    fig.add_annotation(text=annotationText, xref='paper', yref='paper', x=0.02, y=0.98,
+                       xanchor='left', yanchor='top', showarrow=False, font=dict(size=10), align='left',
+                       bgcolor='rgba(245, 222, 179, 0.8)', bordercolor='rgba(0, 0, 0, 0.5)', borderwidth=1,
+                       row=6, col=1)
+    
+    # Gráfica de coste de stockout acumulado
+    predictedCumulativeStockOutCost = [r['predictedCumulativeStockOutCost'] for r in results]
+    hasRealStockOutCost = any(r['realCumulativeStockOutCost'] is not None for r in results)
+    fig.add_trace(go.Scatter(x=steps, y=predictedCumulativeStockOutCost, mode='lines+markers', name='Stockout Cost Predicho (DT)',
+                             line=dict(color='red', width=2, dash='dash'), marker=dict(size=4, symbol='square')), row=7, col=1)
+    
+    if hasRealStockOutCost:
+        validResults = [r for r in results if r['realCumulativeStockOutCost'] is not None]
+        realSteps = [r['step'] for r in validResults]
+        realCumulativeStockOutCost = [r['realCumulativeStockOutCost'] for r in validResults]
+        fig.add_trace(go.Scatter(x=realSteps, y=realCumulativeStockOutCost, mode='lines+markers', name='Stockout Cost Real',
+                                 line=dict(color='blue', width=2), marker=dict(size=4, symbol='circle')), row=7, col=1)
+        
+        totalReal = realCumulativeStockOutCost[-1] if realCumulativeStockOutCost else 0
+        totalPredicted = predictedCumulativeStockOutCost[-1] if predictedCumulativeStockOutCost else 0
+        costDifference = abs(totalReal - totalPredicted)
+        costError = costDifference / max(totalReal, 1e-6) if totalReal > 0 else costDifference
+        annotationText = f'Coste Total Real: {totalReal:.2f}<br>Coste Total Predicho: {totalPredicted:.2f}<br>Diferencia: {costDifference:.2f}<br>Error Relativo: {costError*100:.2f}%'
+    else:
+        totalPredicted = predictedCumulativeStockOutCost[-1] if predictedCumulativeStockOutCost else 0
+        annotationText = f'Coste Total Predicho: {totalPredicted:.2f}'
+    
+    fig.add_annotation(text=annotationText, xref='paper', yref='paper', x=0.02, y=0.98,
+                       xanchor='left', yanchor='top', showarrow=False, font=dict(size=10), align='left',
+                       bgcolor='rgba(245, 222, 179, 0.8)', bordercolor='rgba(0, 0, 0, 0.5)', borderwidth=1,
+                       row=7, col=1)
+    
+    fig.update_layout(height=5600, showlegend=True, hovermode='x unified')
     
     if outputPath:
         if outputPath.endswith('.html'):
             fig.write_html(outputPath)
         else:
-            fig.write_image(outputPath, width=1200, height=3200, scale=2)
+            fig.write_image(outputPath, width=1200, height=5600, scale=2)
     
     fig.show()
     
