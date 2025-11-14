@@ -118,11 +118,24 @@ class DecisionTransformerTrainer(Trainer):
         super().saveModel()
 
     def evaluate_benefits(self):
+        """
+        Evalúa el modelo en datos de test y calcula beneficios y costes acumulados finales medios.
+        
+        Returns:
+            tuple: (test_benefit_mean, real_benefit_mean, test_holding_cost_mean, real_holding_cost_mean,
+                   test_stockout_cost_mean, real_stockout_cost_mean, test_ordering_cost_mean, real_ordering_cost_mean)
+        """
         batch = self.nBatch
 
         self.model.eval()
         all_test_benefits = []
         all_real_benefits = []
+        all_test_holding_costs = []
+        all_real_holding_costs = []
+        all_test_stockout_costs = []
+        all_real_stockout_costs = []
+        all_test_ordering_costs = []
+        all_real_ordering_costs = []
         with torch.no_grad():
             if self.testStrategy is not None:
                 all_problem_data = self.testStrategy.problemData
@@ -137,7 +150,27 @@ class DecisionTransformerTrainer(Trainer):
                 end_idx = min(start_idx + batch, length_data)
                 batch_indices = torch.arange(start_idx, end_idx)
                 test_problem = all_problem_data[batch_indices]
-                real_benefits = test_problem["benefit"][-1]
+                
+                if test_problem["benefit"].dim() > 1:
+                    real_benefits = test_problem["benefit"][:, -1]
+                else:
+                    real_benefits = test_problem["benefit"][-1].unsqueeze(0)
+                
+                if test_problem["cumulativeHoldingCost"].dim() > 1:
+                    real_holding_costs = test_problem["cumulativeHoldingCost"][:, -1]
+                else:
+                    real_holding_costs = test_problem["cumulativeHoldingCost"][-1].unsqueeze(0)
+                
+                if test_problem["cumulativeStockOutCost"].dim() > 1:
+                    real_stockout_costs = test_problem["cumulativeStockOutCost"][:, -1]
+                else:
+                    real_stockout_costs = test_problem["cumulativeStockOutCost"][-1].unsqueeze(0)
+                
+                if test_problem["cumulativeOrderingCost"].dim() > 1:
+                    real_ordering_costs = test_problem["cumulativeOrderingCost"][:, -1]
+                else:
+                    real_ordering_costs = test_problem["cumulativeOrderingCost"][-1].unsqueeze(0)
+                
                 test_td = {k: v.clone() for k, v in test_problem.items()}
                 test_td = {k: v.to(self.device) for k, v in test_td.items()}
                 test_td["returnsToGo"] = torch.zeros((batch), device=self.device)
@@ -146,12 +179,28 @@ class DecisionTransformerTrainer(Trainer):
 
                 for step in range(trajectory_length):
                     test_td = self.model.forward(test_td, nextOrderQuantity=None, is_test=True, update_only=False)
-                all_test_benefits.append(test_td["benefit"][-1].cpu())
-                all_real_benefits.append(real_benefits)
+                
+                all_test_benefits.append(test_td["benefit"][:, -1].cpu())
+                all_real_benefits.append(real_benefits.cpu())
+                all_test_holding_costs.append(test_td["cumulativeHoldingCost"][:, -1].cpu())
+                all_real_holding_costs.append(real_holding_costs.cpu())
+                all_test_stockout_costs.append(test_td["cumulativeStockOutCost"][:, -1].cpu())
+                all_real_stockout_costs.append(real_stockout_costs.cpu())
+                all_test_ordering_costs.append(test_td["cumulativeOrderingCost"][:, -1].cpu())
+                all_real_ordering_costs.append(real_ordering_costs.cpu())
+        
         self.model.train()
-        test_mean = torch.cat(all_test_benefits).mean().item()
-        real_mean = torch.cat(all_real_benefits).mean().item()
-        return test_mean, real_mean
+        test_benefit_mean = torch.cat(all_test_benefits).mean().item()
+        real_benefit_mean = torch.cat(all_real_benefits).mean().item()
+        test_holding_cost_mean = torch.cat(all_test_holding_costs).mean().item()
+        real_holding_cost_mean = torch.cat(all_real_holding_costs).mean().item()
+        test_stockout_cost_mean = torch.cat(all_test_stockout_costs).mean().item()
+        real_stockout_cost_mean = torch.cat(all_real_stockout_costs).mean().item()
+        test_ordering_cost_mean = torch.cat(all_test_ordering_costs).mean().item()
+        real_ordering_cost_mean = torch.cat(all_real_ordering_costs).mean().item()
+        
+        return (test_benefit_mean, real_benefit_mean, test_holding_cost_mean, real_holding_cost_mean,
+                test_stockout_cost_mean, real_stockout_cost_mean, test_ordering_cost_mean, real_ordering_cost_mean)
 
     def train(self):
         epoch = getattr(self, 'currentEpoch', -1) + 1
@@ -239,7 +288,8 @@ class DecisionTransformerTrainer(Trainer):
             
             self.lr_scheduler.step()
             
-            test_benefit, real_benefit = self.evaluate_benefits()
+            (test_benefit, real_benefit, test_holding_cost, real_holding_cost,
+             test_stockout_cost, real_stockout_cost, test_ordering_cost, real_ordering_cost) = self.evaluate_benefits()
 
             validation_loss, cost_metrics = 0, 0
             self.training_metrics['validation_losses'].append(validation_loss)
@@ -247,24 +297,21 @@ class DecisionTransformerTrainer(Trainer):
             
             self.content["EPOCHS"][epoch] = {
                 "training_loss": avgEpochLoss,
-                "validation_loss": validation_loss,
-                "mean_test_total_cost": 0,
-                "mean_real_total_cost": 0,
-                "mean_cost_difference": 0,
                 "learning_rate": self.optimizer.param_groups[0]['lr'],
-                "context_windows": {
-                    "trajectory_length": trajectoryLength,
-                    "max_seq_length": self.model.maxSeqLength,
-                    "num_windows": trajectoryLength - self.model.maxSeqLength,
-                }
+                "mean_test_benefit": f"({test_benefit:.2f}/{real_benefit:.2f})",
+                "mean_test_holding_cost": f"({test_holding_cost:.2f}/{real_holding_cost:.2f})",
+                "mean_test_stockout_cost": f"({test_stockout_cost:.2f}/{real_stockout_cost:.2f})",
+                "mean_test_ordering_cost": f"({test_ordering_cost:.2f}/{real_ordering_cost:.2f})"
             }
 
             self.updateTrackFile()
             
             epoch_time = time.time() - epoch_start_time
-            test_benefit_str = f" | Test benefit: {test_benefit:.2f}" if test_benefit is not None else ""
-            real_benefit_str = f" | Real benefit: {real_benefit:.2f}" if real_benefit is not None else ""
-            print(f"Epoch {epoch} completada - Tiempo: {epoch_time:.2f} segundos{test_benefit_str}{real_benefit_str}")
+            benefit_str = f" | Benefit: ({test_benefit:.2f}/{real_benefit:.2f})" if test_benefit is not None and real_benefit is not None else ""
+            holding_cost_str = f" | Holding cost: ({test_holding_cost:.2f}/{real_holding_cost:.2f})" if test_holding_cost is not None and real_holding_cost is not None else ""
+            stockout_cost_str = f" | Stockout cost: ({test_stockout_cost:.2f}/{real_stockout_cost:.2f})" if test_stockout_cost is not None and real_stockout_cost is not None else ""
+            ordering_cost_str = f" | Ordering cost: ({test_ordering_cost:.2f}/{real_ordering_cost:.2f})" if test_ordering_cost is not None and real_ordering_cost is not None else ""
+            print(f"Epoch {epoch} completada - Tiempo: {epoch_time:.2f} segundos{benefit_str}{holding_cost_str}{stockout_cost_str}{ordering_cost_str}")
             
             self.currentEpoch = epoch
             self.saveModel()
