@@ -74,7 +74,7 @@ class DecisionTransformer(nn.Module):
 
         self.mhaState = nn.MultiheadAttention(
             embed_dim=self.embeddingDim,
-            num_heads=4,
+            num_heads=decisionTransformerConfig.n_head,
             batch_first=True
         )
 

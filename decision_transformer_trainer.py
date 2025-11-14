@@ -88,6 +88,7 @@ class DecisionTransformerTrainer(Trainer):
         self.testStrategy = None
         if hasattr(trainerConfig, 'testDataPath') and trainerConfig.testDataPath is not None:
             self.testStrategy = DTTrainingStrategy(dataPath=trainerConfig.testDataPath, shuffle=False)
+        self.best_test_benefit = float('-inf')
 
     def createModel(self):
         """
@@ -116,6 +117,41 @@ class DecisionTransformerTrainer(Trainer):
 
     def saveModel(self):
         super().saveModel()
+    
+    def saveBestModel(self):
+        """
+        Guarda el mejor modelo basado en el beneficio de test en best.pt.
+        """
+        torch.save({'model_state': self.model.state_dict(),
+                    'optimizer_state': self.optimizer.state_dict(),
+                    'lr_scheduler_state': self.lr_scheduler.state_dict(),
+                    'start_epochs': self.currentEpoch,
+                    'best_test_benefit': self.best_test_benefit,
+                    'rng_state': torch.get_rng_state(),
+                    'cuda_rng_state': torch.cuda.get_rng_state() if torch.cuda.is_available() else 0,
+                    },
+                   self.baselineSavePath,
+                   )
+    
+    def loadBestModel(self):
+        """
+        Carga el mejor beneficio de test desde best.pt si existe.
+        """
+        if os.path.isfile(self.baselineSavePath):
+            try:
+                checkpoint = torch.load(self.baselineSavePath)
+                if 'best_test_benefit' in checkpoint:
+                    self.best_test_benefit = checkpoint['best_test_benefit']
+                    print(f"Mejor beneficio de test cargado: {self.best_test_benefit:.2f}")
+            except Exception as e:
+                print(f"Advertencia: No se pudo cargar el mejor beneficio desde best.pt: {e}")
+    
+    def initTraining(self):
+        """
+        Inicializa el entrenamiento y carga el mejor beneficio de test si existe.
+        """ 
+        self.loadBestModel() 
+        super().initTraining()
 
     def evaluate_benefits(self):
         """
@@ -311,6 +347,11 @@ class DecisionTransformerTrainer(Trainer):
             
             (test_benefit, real_benefit, test_holding_cost, real_holding_cost,
              test_stockout_cost, real_stockout_cost, test_ordering_cost, real_ordering_cost) = self.evaluate_benefits()
+ 
+            if test_benefit > self.best_test_benefit:
+                self.best_test_benefit = test_benefit
+                self.saveBestModel()
+                print(f"¡Nuevo mejor modelo guardado! Beneficio de test: {test_benefit:.2f}")
 
             validation_loss, cost_metrics = 0, 0
             self.training_metrics['validation_losses'].append(validation_loss)
@@ -322,7 +363,8 @@ class DecisionTransformerTrainer(Trainer):
                 "mean_test_benefit": f"({test_benefit:.2f}/{real_benefit:.2f})",
                 "mean_test_holding_cost": f"({test_holding_cost:.2f}/{real_holding_cost:.2f})",
                 "mean_test_stockout_cost": f"({test_stockout_cost:.2f}/{real_stockout_cost:.2f})",
-                "mean_test_ordering_cost": f"({test_ordering_cost:.2f}/{real_ordering_cost:.2f})"
+                "mean_test_ordering_cost": f"({test_ordering_cost:.2f}/{real_ordering_cost:.2f})",
+                "best_test_benefit": self.best_test_benefit
             }
 
             self.updateTrackFile()
@@ -332,7 +374,8 @@ class DecisionTransformerTrainer(Trainer):
             holding_cost_str = f" | Holding cost: ({test_holding_cost:.2f}/{real_holding_cost:.2f})" if test_holding_cost is not None and real_holding_cost is not None else ""
             stockout_cost_str = f" | Stockout cost: ({test_stockout_cost:.2f}/{real_stockout_cost:.2f})" if test_stockout_cost is not None and real_stockout_cost is not None else ""
             ordering_cost_str = f" | Ordering cost: ({test_ordering_cost:.2f}/{real_ordering_cost:.2f})" if test_ordering_cost is not None and real_ordering_cost is not None else ""
-            print(f"Epoch {epoch} completada - Tiempo: {epoch_time:.2f} segundos{benefit_str}{holding_cost_str}{stockout_cost_str}{ordering_cost_str}")
+            best_benefit_str = f" | Mejor beneficio: {self.best_test_benefit:.2f}"
+            print(f"Epoch {epoch} completada - Tiempo: {epoch_time:.2f} segundos{benefit_str}{holding_cost_str}{stockout_cost_str}{ordering_cost_str}{best_benefit_str}")
             
             self.currentEpoch = epoch
             self.saveModel()
