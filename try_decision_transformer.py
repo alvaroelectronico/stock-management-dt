@@ -74,7 +74,7 @@ def getProjectDirectory():
     return str(Path(__file__).resolve().parent)
 
 
-def loadTrainedModel(modelPath, configPath=None, dataPath=None):
+def loadTrainedModel(modelPath, config=None, dataPath=None):
     """
     Carga un modelo Decision Transformer ya entrenado con parámetros de escalado.
     
@@ -86,10 +86,8 @@ def loadTrainedModel(modelPath, configPath=None, dataPath=None):
     Returns:
         Modelo Decision Transformer cargado
     """
-    if configPath is None:
+    if config is None:
         config = DecisionTransformerConfig()
-    else:
-        config = torch.load(configPath)
     
     # Calcular parámetros de escalado desde los datos de entrenamiento
     scaling_params = None
@@ -486,8 +484,8 @@ def createCombinedPlots(results, outputPath=None):
     return fig
 
 
-def runDecisionTransformerTest(modelPath, dataPath, problemIndex=0, maxSteps=None, outputPath=None, plotOutputPath=None):
-    model = loadTrainedModel(modelPath, dataPath=dataPath).to(device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+def runDecisionTransformerTest(modelPath, dataPath, problemIndex=0, config=None, maxSteps=None, outputPath=None, plotOutputPath=None):
+    model = loadTrainedModel(modelPath, config=config, dataPath=dataPath).to(device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
     problem = getTestProblem(dataPath, problemIndex).to(device=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
     results = tryDecisionTransformer(model, problem, maxSteps)
     report = generateTestReport(results, outputPath)
@@ -498,8 +496,12 @@ def runDecisionTransformerTest(modelPath, dataPath, problemIndex=0, maxSteps=Non
 
 if __name__ == "__main__":
     projectDir = getProjectDirectory()
-    modelPath = os.path.join(projectDir, "training_models/decision_transformer_model", "training.pt")
-    dataPath = os.path.join(projectDir, "data", "training_data2.pt")
+    config = DecisionTransformerConfig(
+        n_head=2,
+        hidden_size=96
+    )
+    modelPath = os.path.join(projectDir, "training_models/decision_transformer_model", "best.pt")
+    dataPath = os.path.join(projectDir, "data", "test_data.pt")
     outputPath = os.path.join(projectDir, "test_results.json")
     plotOutputPath = os.path.join(projectDir, "combined_plots.html")
     
@@ -517,10 +519,11 @@ if __name__ == "__main__":
         report = runDecisionTransformerTest(
             modelPath=modelPath,
             dataPath=dataPath,
-            problemIndex=2,
+            problemIndex=13,#786,#643,#899,
             maxSteps=30,
             outputPath=outputPath,
-            plotOutputPath=plotOutputPath
+            plotOutputPath=plotOutputPath,
+            config=config
         )
         
         print(f"\nTest completado exitosamente!")

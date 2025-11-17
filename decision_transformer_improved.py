@@ -55,7 +55,6 @@ class DecisionTransformer(nn.Module):
 
     def __init__(self, decisionTransformerConfig, scaling_params: Optional[Dict[str, Tuple[float, float]]] = None):
         super().__init__()
-        self.embeddingDim = 128
         self.device = getTorchDevice()
 
         self.decisionTransformerConfig = decisionTransformerConfig

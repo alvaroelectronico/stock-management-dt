@@ -235,7 +235,7 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
 
 
 if __name__ == "__main__":
-    noTrajectories = 32
+    noTrajectories = 100000
     trainingData = TensorDict({})
     
     
@@ -251,7 +251,7 @@ if __name__ == "__main__":
         return str(Path(__file__).resolve().parent)
 
     torch.save(trainingData,
-               getProjectDirectory() + "/data/test_data.pt")
+               getProjectDirectory() + "/data/training_data.pt")
     
     
 

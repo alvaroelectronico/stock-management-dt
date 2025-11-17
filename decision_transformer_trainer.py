@@ -415,14 +415,14 @@ if __name__ == "__main__":
         nBatch=32,#32
         nVal=1000,  # Ajusta este valor según tus necesidades
         stepsPerEpoch=2000,
-        trainStrategy=DTTrainingStrategy(dataPath=["data/training_data2.pt"]),
+        trainStrategy=DTTrainingStrategy(dataPath=["data/training_data.pt"]),
         lr_scheduler=1e-4
     )
     
     
     try:
         # Rutas de datos de entrenamiento
-        data_paths = ["data/training_data2.pt"]
+        data_paths = ["data/training_data.pt"]
         
         # Calcular parámetros de escalado desde los datos de entrenamiento
         scaling_params = compute_scaling_params_from_training_data(data_paths)
@@ -430,7 +430,10 @@ if __name__ == "__main__":
         
         # Crear el modelo con los parámetros de escalado
         model = DecisionTransformer(
-            decisionTransformerConfig=DecisionTransformerConfig(),
+            decisionTransformerConfig=DecisionTransformerConfig(
+                hidden_size=96,
+                n_head=2,
+            ),
             scaling_params=scaling_params)
         
         # Crear el trainer con AdamW y learning rate más alto
@@ -440,18 +443,18 @@ if __name__ == "__main__":
         lr_scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer,
             start_factor=1.0,  # Factor inicial (5e-4)
-            end_factor=0.05,    # Factor final (2.5e-4 / 5e-4 = 0.5)
-            total_iters=200    # Mucho menos agresivo
+            end_factor=0.01,    # Factor final (2.5e-4 / 5e-4 = 0.5)
+            total_iters=50    # Mucho menos agresivo
         )
         
         config = TrainerConfig(
-            nBatch=32,
+            nBatch=128,
             nVal=1000, 
-            stepsPerEpoch=2,
+            stepsPerEpoch=100000//128 * 3,
             trainStrategy=DTTrainingStrategy(dataPath=data_paths),
             lr_scheduler=lr_scheduler,
             optimizer=optimizer,
-            testDataPath=["data/test_data.pt"]
+            testDataPath=["data/test_data.pt"],
         )
         trainer = DecisionTransformerTrainer(
             savePath="./training_models/",  # Cambiado a training_models
