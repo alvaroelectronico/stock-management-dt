@@ -356,7 +356,6 @@ class DecisionTransformer(nn.Module):
             raise ValueError("nextOrderQuantity debe ser proporcionado cuando is_test=False y update_only=False")
 
         if not update_only:
-            batch_size = batchSize
             if not is_test:
                 td["saved_returnsToGo"].append(td["returnsToGo"].clone())
                 td["saved_actions"].append(td["orderQuantity"].clone())

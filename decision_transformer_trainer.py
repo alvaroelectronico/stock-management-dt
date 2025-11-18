@@ -431,8 +431,8 @@ if __name__ == "__main__":
         # Crear el modelo con los parámetros de escalado
         model = DecisionTransformer(
             decisionTransformerConfig=DecisionTransformerConfig(
-                hidden_size=96,
-                n_head=2,
+                hidden_size=32,
+                n_head=1,
             ),
             scaling_params=scaling_params)
         
@@ -444,7 +444,7 @@ if __name__ == "__main__":
             optimizer,
             start_factor=1.0,  # Factor inicial (5e-4)
             end_factor=0.01,    # Factor final (2.5e-4 / 5e-4 = 0.5)
-            total_iters=50    # Mucho menos agresivo
+            total_iters=300    # Mucho menos agresivo
         )
         
         config = TrainerConfig(
@@ -458,7 +458,7 @@ if __name__ == "__main__":
         )
         trainer = DecisionTransformerTrainer(
             savePath="./training_models/",  # Cambiado a training_models
-            name="decision_transformer_model",  # Nombre más descriptivo
+            name="decision_transformer_model_32_1",  # Nombre más descriptivo
             model=model,
             trainerConfig=config
         )
