@@ -296,11 +296,10 @@ class DecisionTransformerTrainer(Trainer):
                 trajectoryLength = td['demand'].size(1)
                 batch_size = td['onHandLevel'].size(0)
                 
-                # Preasignar tensors para todos los timesteps
-                states_emb_buffer = torch.zeros(batch_size, trajectoryLength, td["statesEmbedding"].size(-1), 
-                                               device=self.device, dtype=td["statesEmbedding"].dtype)
-                actions_emb_buffer = torch.zeros(batch_size, trajectoryLength, td["actionsEmbedding"].size(-1), 
-                                                device=self.device, dtype=td["actionsEmbedding"].dtype)
+                # Guardar secuencias completas de embeddings para cada timestep
+                # Cada elemento contiene la secuencia completa hasta ese punto
+                states_emb_sequences = []
+                actions_emb_sequences = []
                 old_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
                 old_order_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
                 old_quantity_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
@@ -311,6 +310,10 @@ class DecisionTransformerTrainer(Trainer):
                 self.model.train()
                 
                 for step in range(trajectoryLength):
+                    # Guardar actionsEmbedding ANTES del forward porque se actualiza después de calcular las distribuciones
+                    # Necesitamos el estado antes de añadir la acción del paso actual para recalcular correctamente
+                    actions_emb_before = td["actionsEmbedding"].clone().detach()
+                    
                     td = self.model.forward(td)
                     
                     order_decision = td["orderDecision"].detach()
@@ -319,10 +322,12 @@ class DecisionTransformerTrainer(Trainer):
                     old_order_log_prob = td["orderDistribution"].log_prob(order_decision).detach()
                     old_quantity_log_prob = td["quantityDistribution"].log_prob(quantity_value).detach()
                     
-                    # Escribir directamente en los buffers preasignados
-                    # statesEmbedding y actionsEmbedding tienen shape [batch, seq_len, embedding_dim], tomamos el último elemento
-                    states_emb_buffer[:, step, :] = td["statesEmbedding"][:, -1, :].detach()
-                    actions_emb_buffer[:, step, :] = td["actionsEmbedding"][:, -1, :].detach()
+                    # Guardar la secuencia completa de embeddings hasta este punto
+                    # statesEmbedding tiene shape [batch, step+1, embedding_dim] (incluye estado del paso actual)
+                    # actionsEmbedding antes del forward tiene shape [batch, step, embedding_dim] (solo acciones anteriores)
+                    states_emb_sequences.append(td["statesEmbedding"].clone().detach())
+                    actions_emb_sequences.append(actions_emb_before)
+                    
                     old_log_probs[:, step, :] = td["actionLogProb"].detach()
                     old_order_log_probs[:, step, :] = old_order_log_prob
                     old_quantity_log_probs[:, step, :] = old_quantity_log_prob
@@ -346,13 +351,15 @@ class DecisionTransformerTrainer(Trainer):
                     order_entropies = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
                     quantity_entropies = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
                     
-                    # Recalcular log_probs para cada timestep usando embeddings guardados
+                    # Recalcular log_probs para cada timestep usando secuencias completas de embeddings
                     for step in range(trajectoryLength):
-                        # Obtener nuevas distribuciones usando embeddings de este timestep
-                        # forward_from_embeddings espera [batch, seq_len, embedding_dim], necesitamos unsqueeze(1)
+                        # Obtener nuevas distribuciones usando la secuencia completa de embeddings hasta este punto
+                        # forward_from_embeddings espera [batch, seq_len, embedding_dim]
+                        # states_emb_sequences[step] tiene shape [batch, step+1, embedding_dim]
+                        # actions_emb_sequences[step] tiene shape [batch, step, embedding_dim]
                         order_dist, quantity_dist, order_logit = self.model.forward_from_embeddings(
-                            states_emb_buffer[:, step, :].unsqueeze(1), 
-                            actions_emb_buffer[:, step, :].unsqueeze(1)
+                            states_emb_sequences[step], 
+                            actions_emb_sequences[step]
                         )
                         
                         # Recalcular log_probs separados de la acción TOMADA en este timestep
