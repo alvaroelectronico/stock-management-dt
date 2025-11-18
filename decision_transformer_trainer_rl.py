@@ -92,10 +92,7 @@ class DecisionTransformerTrainer(Trainer):
         self.best_test_benefit = float('-inf')
         
         self.ppo_clip = getattr(trainerConfig, 'ppo_clip', 0.2)
-        self.ppo_epochs = getattr(trainerConfig, 'ppo_epochs', 4)
-        self.gamma = getattr(trainerConfig, 'gamma', 0.99)
-        self.lam = getattr(trainerConfig, 'lam', 0.95) 
-        self.value_coef = getattr(trainerConfig, 'value_coef', 0.5)
+        self.ppo_epochs = getattr(trainerConfig, 'ppo_epochs', 2)
         self.entropy_coef = getattr(trainerConfig, 'entropy_coef', 0.01)
 
     def createModel(self):
@@ -245,25 +242,6 @@ class DecisionTransformerTrainer(Trainer):
         return (test_benefit_mean, real_benefit_mean, test_holding_cost_mean, real_holding_cost_mean,
                 test_stockout_cost_mean, real_stockout_cost_mean, test_ordering_cost_mean, real_ordering_cost_mean)
 
-    def compute_gae(self, rewards, values, dones, next_value):
-        batch_size, seq_len = rewards.shape
-        advantages = torch.zeros_like(rewards)
-        last_gae = 0
-        
-        for t in reversed(range(seq_len)):
-            if t == seq_len - 1:
-                next_non_terminal = 1.0 - dones[:, t]
-                next_value_t = next_value.squeeze(-1)
-            else:
-                next_non_terminal = 1.0 - dones[:, t]
-                next_value_t = values[:, t + 1]
-            
-            delta = rewards[:, t] + self.gamma * next_value_t * next_non_terminal - values[:, t]
-            advantages[:, t] = last_gae = delta + self.gamma * self.lam * next_non_terminal * last_gae
-        
-        returns = advantages + values
-        return advantages, returns
-    
     def compute_ppo_loss(self, old_log_probs, new_log_probs, advantages,
                          old_order_log_probs, new_order_log_probs,
                          old_quantity_log_probs, new_quantity_log_probs,
@@ -335,37 +313,21 @@ class DecisionTransformerTrainer(Trainer):
                         'old_order_log_prob': old_order_log_prob,
                         'old_quantity_log_prob': old_quantity_log_prob,
                         'quantity_value': quantity_value,
-                        'order_decision': order_decision
+                        'order_decision': order_decision,
+                        'benefit': td["benefit"][:, -1].squeeze(-1).detach()
                     }
-                    
-                    if td["benefit"].size(1) > 0:
-                        if step == 0:
-                            reward = td["benefit"][:, -1].squeeze(-1)
-                        else:
-                            reward = (td["benefit"][:, -1] - td["benefit"][:, -2]).squeeze(-1)
-                        value = td["benefit"][:, -1].squeeze(-1)
-                    else:
-                        reward = torch.zeros(td["onHandLevel"].size(0), device=self.device)
-                        value = torch.zeros(td["onHandLevel"].size(0), device=self.device)
-                    
-                    step_data['reward'] = reward
-                    step_data['value'] = value
-                    step_data['done'] = torch.ones(td["onHandLevel"].size(0), device=self.device) if step == trajectoryLength - 1 else torch.zeros(td["onHandLevel"].size(0), device=self.device)
                     
                     timestep_data.append(step_data)
                 
-                # Stackear para GAE
+                # Calcular advantages directamente desde los benefits
                 old_log_probs = torch.stack([t['old_log_prob'] for t in timestep_data], dim=1)
                 old_order_log_probs = torch.stack([t['old_order_log_prob'] for t in timestep_data], dim=1)
                 old_quantity_log_probs = torch.stack([t['old_quantity_log_prob'] for t in timestep_data], dim=1)
                 order_decisions = torch.stack([t['order_decision'] for t in timestep_data], dim=1)
-                rewards = torch.stack([t['reward'] for t in timestep_data], dim=1)
-                values = torch.stack([t['value'] for t in timestep_data], dim=1)
-                dones = torch.stack([t['done'] for t in timestep_data], dim=1)
+                benefits = torch.stack([t['benefit'] for t in timestep_data], dim=1)
                 
-                next_value = torch.zeros(self.nBatch, device=self.device)
-                advantages, returns = self.compute_gae(rewards, values, dones, next_value)
-                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+                # Normalizar benefits para usarlos como advantages
+                advantages = (benefits - benefits.mean()) / (benefits.std() + 1e-8)
                 
                 # Fase 2: PPO epochs - recalcular log_probs para cada timestep
                 total_loss = 0
