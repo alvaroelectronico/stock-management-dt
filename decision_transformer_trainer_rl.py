@@ -320,8 +320,9 @@ class DecisionTransformerTrainer(Trainer):
                     old_quantity_log_prob = td["quantityDistribution"].log_prob(quantity_value).detach()
                     
                     # Escribir directamente en los buffers preasignados
-                    states_emb_buffer[:, step, :] = td["statesEmbedding"].detach()
-                    actions_emb_buffer[:, step, :] = td["actionsEmbedding"].detach()
+                    # statesEmbedding y actionsEmbedding tienen shape [batch, seq_len, embedding_dim], tomamos el último elemento
+                    states_emb_buffer[:, step, :] = td["statesEmbedding"][:, -1, :].detach()
+                    actions_emb_buffer[:, step, :] = td["actionsEmbedding"][:, -1, :].detach()
                     old_log_probs[:, step, :] = td["actionLogProb"].detach()
                     old_order_log_probs[:, step, :] = old_order_log_prob
                     old_quantity_log_probs[:, step, :] = old_quantity_log_prob
@@ -337,20 +338,21 @@ class DecisionTransformerTrainer(Trainer):
                 total_policy_loss = 0
                 total_entropy = 0
                 
-                # Preasignar tensors para nuevos log_probs
-                new_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
-                new_order_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
-                new_quantity_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
-                order_entropies = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
-                quantity_entropies = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
-                
                 for ppo_epoch in range(self.ppo_epochs):
+                    # Crear nuevos tensors en cada iteración para evitar problemas con backward
+                    new_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
+                    new_order_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
+                    new_quantity_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
+                    order_entropies = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
+                    quantity_entropies = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
+                    
                     # Recalcular log_probs para cada timestep usando embeddings guardados
                     for step in range(trajectoryLength):
                         # Obtener nuevas distribuciones usando embeddings de este timestep
+                        # forward_from_embeddings espera [batch, seq_len, embedding_dim], necesitamos unsqueeze(1)
                         order_dist, quantity_dist, order_logit = self.model.forward_from_embeddings(
-                            states_emb_buffer[:, step, :], 
-                            actions_emb_buffer[:, step, :]
+                            states_emb_buffer[:, step, :].unsqueeze(1), 
+                            actions_emb_buffer[:, step, :].unsqueeze(1)
                         )
                         
                         # Recalcular log_probs separados de la acción TOMADA en este timestep
@@ -358,7 +360,7 @@ class DecisionTransformerTrainer(Trainer):
                         new_quantity_log_prob = quantity_dist.log_prob(quantity_values[:, step, :])
                         new_log_prob = new_order_log_prob + order_decisions[:, step, :] * new_quantity_log_prob
                         
-                        # Escribir directamente en los tensors preasignados
+                        # Escribir directamente en los tensors
                         new_log_probs[:, step, :] = new_log_prob
                         new_order_log_probs[:, step, :] = new_order_log_prob
                         new_quantity_log_probs[:, step, :] = new_quantity_log_prob
