@@ -305,7 +305,6 @@ class DecisionTransformerTrainer(Trainer):
                 old_quantity_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
                 order_decisions = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
                 quantity_values = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
-                benefits = torch.zeros(batch_size, trajectoryLength, device=self.device)
                 
                 self.model.train()
                 
@@ -333,10 +332,11 @@ class DecisionTransformerTrainer(Trainer):
                     old_quantity_log_probs[:, step, :] = old_quantity_log_prob
                     quantity_values[:, step, :] = quantity_value
                     order_decisions[:, step, :] = order_decision
-                    benefits[:, step] = td["benefit"][:, -1].squeeze(-1).detach()
                 
+                benefits = td["benefit"][:, -1].squeeze(-1)
                 # Normalizar benefits para usarlos como advantages
                 advantages = (benefits - benefits.mean()) / (benefits.std() + 1e-8)
+                advantages = advantages.unsqueeze(-1)
                 
                 # Fase 2: PPO epochs - recalcular log_probs para cada timestep
                 total_loss = 0

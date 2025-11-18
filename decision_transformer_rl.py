@@ -301,7 +301,8 @@ class DecisionTransformer(nn.Module):
         
         orderLogProb = orderOrNot.log_prob(orderDecision)
         quantityLogProb = predictedValue.log_prob(quantityValue)
-        totalLogProb = orderLogProb +  quantityLogProb
+        # Solo se contabiliza la log_prob de la cantidad cuando realmente se hace un pedido
+        totalLogProb = orderLogProb + orderDecision * quantityLogProb
         
         predictedAction = self._unscale_field(predictedActionScaled, "orderQuantity")
         predictedAction = torch.ceil(predictedAction).long().float()
