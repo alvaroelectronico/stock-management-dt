@@ -60,6 +60,43 @@ def generateInstanceData():
                  'inTransitStock': np.zeros(leadTime, dtype=int)} 
     return inputData
 
+def calculate_optimal_rtg(trajectory_length, demand_mean, total_demand, ordering_cost, holding_cost, stockout_penalty):
+    """
+    Calcula el Return-to-Go inicial óptimo usando EOQ.
+    """
+    Q_star = np.sqrt((2 * demand_mean * ordering_cost) / holding_cost)
+    
+    num_orders = total_demand / Q_star
+    total_ordering_cost = num_orders * ordering_cost
+    
+    avg_inventory = (Q_star / 2)
+    total_holding_cost = trajectory_length * holding_cost * avg_inventory
+    
+    optimal_rtg = -(total_ordering_cost + total_holding_cost)
+    
+    return optimal_rtg
+
+
+def calculate_rtg_from_trajectory(trajectory, optimal_rtg):
+    """
+    Calcula el return-to-go acumulado para cada paso de la trayectoria.
+    RTG en t es el RTG óptimo menos los costes ya incurridos.
+    """
+    trajectory_length = len(trajectory)
+    
+    for i in range(trajectory_length):
+        cost_at_step = (
+            trajectory[i]['state']['cumulativeHoldingCost'] +
+            trajectory[i]['state']['cumulativeOrderingCost'] +
+            trajectory[i]['state']['cumulativeStockOutCost']
+        )
+        
+        rtg = optimal_rtg + cost_at_step
+        trajectory[i]['returnToGo'] = rtg
+    
+    return trajectory
+
+
 def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
     """
     Genera trayectoria con warm-up hasta que llega el primer pedido.
@@ -86,6 +123,16 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
     demand_std = np.random.uniform(MIN_DEMAND_STD, MAX_DEMAND_STD)
 
     eoq = int(np.ceil(np.sqrt(2*orderingCost*demand_mean/holdingCost)))
+    
+    expected_total_demand = demand_mean * trajectoryLength
+    optimal_rtg = calculate_optimal_rtg(
+        trajectory_length=trajectoryLength,
+        demand_mean=demand_mean,
+        total_demand=expected_total_demand,
+        ordering_cost=orderingCost,
+        holding_cost=holdingCost,
+        stockout_penalty=stockOutPenalty
+    )
 
     k = stats.norm.ppf(CSL)
     safetyStock = int(np.ceil(k * demand_std * np.sqrt(leadTime)))
@@ -158,10 +205,13 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
             state["cumulativeOrderingCost"] = totalOrderingCost
             state["cumulativeStockOutCost"] = totalStockOutCost
             
+            total_cost_at_step = totalHoldingCost + totalOrderingCost + totalStockOutCost
+            current_rtg = optimal_rtg + total_cost_at_step
+            
             trajectory.append({
                 'state': state, 
                 'action': current_order_quantity,
-                'returnToGo': 0.0
+                'returnToGo': current_rtg
             })
             
             stepsRecorded += 1
@@ -171,20 +221,7 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
     if stepsRecorded < trajectoryLength:
         print(f"Advertencia: Solo se grabaron {stepsRecorded} de {trajectoryLength} pasos")
 
-    reward = (totalIncome - totalHoldingCost - totalStockOutCost - totalOrderingCost) / stepsRecorded if stepsRecorded > 0 else 0
     
-    for i in range(stepsRecorded):
-        if i >= RETURN_TO_GO_WINDOW:
-            #BenefitToAdd = totalBenefit[i-RETURN_TO_GO_WINDOW] - totalBenefit[i-RETURN_TO_GO_WINDOW-1]
-            #benefitToSubstract = totalBenefit[i] - totalBenefit[i-1]
-            #returnToGo = (reward*RETURN_TO_GO_WINDOW + BenefitToAdd - benefitToSubstract) / RETURN_TO_GO_WINDOW
-            #trajectory[i]['returnToGo'] = returnToGo
-            trajectory[i]['returnToGo'] = 0
-        else:
-            #trajectory[i]['returnToGo'] = reward
-            trajectory[i]['returnToGo'] = 0
-
-        
     return trajectory
 
 
@@ -222,7 +259,7 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
             'cumulativeStockOutCost': torch.tensor([t['state']['cumulativeStockOutCost'] for t in trajectory], dtype=torch.float)
         }),
         'actions': torch.stack([torch.tensor(t['action'], dtype=torch.float) for t in trajectory]),
-        'returnsToGo': torch.tensor(trajectory[0]['returnToGo'], dtype=torch.float)
+        'returnsToGo': torch.tensor(trajectory[0]['returnToGo'], dtype=torch.float).unsqueeze(-1)
     })
     
     if len(trainingData.keys()) == 0:
@@ -235,9 +272,8 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
 
 
 if __name__ == "__main__":
-    noTrajectories = 100000
+    noTrajectories = 32
     trainingData = TensorDict({})
-    
     
     for i in range(noTrajectories):
         inputData = generateInstanceData()

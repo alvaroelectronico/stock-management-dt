@@ -62,7 +62,7 @@ class DecisionTransformer(nn.Module):
 
         self.maxSeqLength = 30
 
-        self.projectScalarData= nn.Linear(6, self.embeddingDim)
+        self.projectScalarData = nn.Linear(5, self.embeddingDim)
         self.projectStockInTransitData= nn.Linear(1, self.embeddingDim)
         self.projectDemandData = nn.Linear(1, self.embeddingDim)
         
@@ -252,7 +252,6 @@ class DecisionTransformer(nn.Module):
         holdingCostScaled = self._scale_field(td["holdingCost"], "holdingCost")
         orderingCostScaled = self._scale_field(td["orderingCost"], "orderingCost")
         stockOutPenaltyScaled = self._scale_field(td["stockOutPenalty"], "stockOutPenalty")
-        unitRevenueScaled = self._scale_field(td["unitRevenue"], "unitRevenue")
         leadTimeScaled = self._scale_field(td["leadTime"], "leadTime")
         
         scalarData = torch.cat([
@@ -260,7 +259,6 @@ class DecisionTransformer(nn.Module):
             holdingCostScaled.unsqueeze(-1).unsqueeze(1).expand(-1, seqLen, -1),
             orderingCostScaled.unsqueeze(-1).unsqueeze(1).expand(-1, seqLen, -1),
             stockOutPenaltyScaled.unsqueeze(-1).unsqueeze(1).expand(-1, seqLen, -1),
-            unitRevenueScaled.unsqueeze(-1).unsqueeze(1).expand(-1, seqLen, -1),
             leadTimeScaled.unsqueeze(-1).unsqueeze(1).expand(-1, seqLen, -1)
         ], dim=-1)
         
@@ -369,7 +367,6 @@ class DecisionTransformer(nn.Module):
                 holdingCostScaled = self._scale_field(td["holdingCost"], "holdingCost")
                 orderingCostScaled = self._scale_field(td["orderingCost"], "orderingCost")
                 stockOutPenaltyScaled = self._scale_field(td["stockOutPenalty"], "stockOutPenalty")
-                unitRevenueScaled = self._scale_field(td["unitRevenue"], "unitRevenue")
                 leadTimeScaled = self._scale_field(td["leadTime"], "leadTime")
                 
                 scalarData = torch.cat([
@@ -377,7 +374,6 @@ class DecisionTransformer(nn.Module):
                     holdingCostScaled.unsqueeze(-1),
                     orderingCostScaled.unsqueeze(-1),
                     stockOutPenaltyScaled.unsqueeze(-1),
-                    unitRevenueScaled.unsqueeze(-1),
                     leadTimeScaled.unsqueeze(-1)
                     ], dim=-1)
 
@@ -465,9 +461,6 @@ class DecisionTransformer(nn.Module):
             td["actionsEmbedding"] = self.addSequenceData(td, td["actionsEmbedding"], actionEmbedding)
         else:
             orderQuantity = nextOrderQuantity
-
-        currentTimeStep = td["currentTimestep"].long()
-        batch_size = batchSize
         
         stockToArrive = td["inTransitStock"][:, 0]
         td["onHandLevel"] = td["onHandLevel"] + stockToArrive
@@ -525,6 +518,7 @@ class DecisionTransformer(nn.Module):
 
         td["forecast"] = torch.roll(td["forecast"], shifts=-1, dims=1)
         td["demand"] = torch.roll(td["demand"], shifts=-1, dims=-1)
+        td["returnsToGo"] = td["returnsToGo"] + holdingCost + stockoutPenalty + orderingCost
 
         if is_test:
             if not hasattr(self, 'test_metrics'):

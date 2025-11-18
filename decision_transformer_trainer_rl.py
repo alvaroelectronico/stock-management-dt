@@ -1,5 +1,5 @@
 from torch import nn
-from decision_transformer_improved import DecisionTransformer
+from decision_transformer_rl import DecisionTransformer
 from trainer import Trainer, TrainerConfig
 import torch
 from decision_transformer_strategies import TrainingStrategy
@@ -16,6 +16,7 @@ from datetime import date
 import random
 import time
 from data_scaler import compute_scaling_params_from_training_data
+from torch.distributions import Normal, Bernoulli
 
 DEBUG_TRAINING_SAVED_COUNT = 0
 
@@ -89,6 +90,13 @@ class DecisionTransformerTrainer(Trainer):
         if hasattr(trainerConfig, 'testDataPath') and trainerConfig.testDataPath is not None:
             self.testStrategy = DTTrainingStrategy(dataPath=trainerConfig.testDataPath, shuffle=False)
         self.best_test_benefit = float('-inf')
+        
+        self.ppo_clip = getattr(trainerConfig, 'ppo_clip', 0.2)
+        self.ppo_epochs = getattr(trainerConfig, 'ppo_epochs', 4)
+        self.gamma = getattr(trainerConfig, 'gamma', 0.99)
+        self.lam = getattr(trainerConfig, 'lam', 0.95) 
+        self.value_coef = getattr(trainerConfig, 'value_coef', 0.5)
+        self.entropy_coef = getattr(trainerConfig, 'entropy_coef', 0.01)
 
     def createModel(self):
         """
@@ -213,7 +221,7 @@ class DecisionTransformerTrainer(Trainer):
                 trajectory_length = test_td['demand'].size(1)
 
                 for step in range(trajectory_length):
-                    test_td = self.model.forward(test_td, nextOrderQuantity=None, is_test=True, update_only=False)
+                    test_td = self.model.forward(test_td)
                 
                 all_test_benefits.append(test_td["benefit"][:, -1].cpu())
                 all_real_benefits.append(real_benefits.cpu())
@@ -237,6 +245,42 @@ class DecisionTransformerTrainer(Trainer):
         return (test_benefit_mean, real_benefit_mean, test_holding_cost_mean, real_holding_cost_mean,
                 test_stockout_cost_mean, real_stockout_cost_mean, test_ordering_cost_mean, real_ordering_cost_mean)
 
+    def compute_gae(self, rewards, values, dones, next_value):
+        batch_size, seq_len = rewards.shape
+        advantages = torch.zeros_like(rewards)
+        last_gae = 0
+        
+        for t in reversed(range(seq_len)):
+            if t == seq_len - 1:
+                next_non_terminal = 1.0 - dones[:, t]
+                next_value_t = next_value.squeeze(-1)
+            else:
+                next_non_terminal = 1.0 - dones[:, t]
+                next_value_t = values[:, t + 1]
+            
+            delta = rewards[:, t] + self.gamma * next_value_t * next_non_terminal - values[:, t]
+            advantages[:, t] = last_gae = delta + self.gamma * self.lam * next_non_terminal * last_gae
+        
+        returns = advantages + values
+        return advantages, returns
+    
+    def compute_ppo_loss(self, old_log_probs, new_log_probs, advantages, new_order_dists, new_quantity_dists):
+        ratio = torch.exp(new_log_probs - old_log_probs)
+        
+        surr1 = ratio * advantages.unsqueeze(-1)
+        surr2 = torch.clamp(ratio, 1.0 - self.ppo_clip, 1.0 + self.ppo_clip) * advantages.unsqueeze(-1)
+        policy_loss = -torch.min(surr1, surr2).mean()
+        
+        order_entropies = torch.stack([dist.entropy().squeeze(-1) for dist in new_order_dists], dim=1)
+        quantity_entropies = torch.stack([dist.entropy().squeeze(-1) for dist in new_quantity_dists], dim=1)
+        order_entropy = order_entropies.mean()
+        quantity_entropy = quantity_entropies.mean()
+        entropy = order_entropy + quantity_entropy
+        
+        loss = policy_loss - self.entropy_coef * entropy
+        
+        return loss, policy_loss, entropy
+
     def train(self):
         epoch = getattr(self, 'currentEpoch', -1) + 1
 
@@ -249,93 +293,125 @@ class DecisionTransformerTrainer(Trainer):
         while True:
             epoch_start_time = time.time()
             epochLoss = 0
+            epoch_policy_loss = 0
+            epoch_entropy = 0
             currentStep = 1
             progress_checkpoints = [int(self.stepsPerEpoch * p / 100) for p in range(10, 101, 10)]
             
             while currentStep <= self.stepsPerEpoch:
-
                 dtData = self.trainStrategy.getTrainingData(self.nBatch)
                 problemData, orderQuantityData, returnsToGoData = dtData
                 
-                orderQuantityData = orderQuantityData.to(self.device)
-                #returnsToGoData = torch.zeros_like(returnsToGoData)
                 returnsToGoData = returnsToGoData.to(self.device)
                 td = {k: v.to(self.device) for k, v in problemData.items()}
                 
-                self.model.setInitalReturnToGo(td, returnsToGoData) 
                 td = self.model.initModel(td)
                 
-                trajectoryLength = orderQuantityData.size(1)
+                trajectoryLength = td['demand'].size(1)
                 
-                startPoint = random.randint(0, max(0, trajectoryLength-self.model.maxSeqLength))
-                window_start = startPoint
-                window_end = min(window_start + self.model.maxSeqLength, trajectoryLength)
-                    
+                # Guardar datos por timestep
+                timestep_data = []
+                
                 self.model.train()
-                cont = 0
-                while cont < window_end:
-                    end = min(cont + self.model.maxSeqLength, window_end)
-
-                    td["currentTimestep"] = torch.zeros((orderQuantityData.size(0), 1), device=self.device)
-                    
-                    if cont >= window_start:
-                        save_training_debug_input(td, orderQuantityData, currentStep, cont, window_start, window_end)
-                    
-                    td = self.model.forward(td, nextOrderQuantity=orderQuantityData[:, cont].unsqueeze(-1), is_test=False, update_only=cont<window_start)
-                    cont += 1
-
-                if self.trainerConfig.use_bfloat16 and self.device.type == "cuda":
-                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                        self.model.non_constructive_forward(td)
-                        
-                        predictedAction = td["predictedAction"]
-                        predictedOrderDecision = td["predictedOrderDecision"]
-                        realActions = orderQuantityData[:, window_start:window_end]
-                        
-                        realOrderDecision = (realActions > 0).float()
-                        
-                        decisionLoss = nn.BCEWithLogitsLoss()(predictedOrderDecision.squeeze(-1), realOrderDecision)
-                        
-                        predictedActionScaled = self.model._scale_field(predictedAction.squeeze(-1), "orderQuantity")
-                        realActionsScaled = self.model._scale_field(realActions, "orderQuantity")
-                        
-                        orderMask = (realActions > 0).float()
-                        quantityLoss = nn.MSELoss(reduction='none')(predictedActionScaled, realActionsScaled)
-                        quantityLoss = (quantityLoss * orderMask).sum() / (orderMask.sum() + 1e-8)
-                        
-                        loss = decisionLoss + quantityLoss
-                else:
-                    self.model.non_constructive_forward(td)
-                    
-                    predictedAction = td["predictedAction"]
-                    predictedOrderDecision = td["predictedOrderDecision"]
-                    realActions = orderQuantityData[:, window_start:window_end]
-                    
-                    realOrderDecision = (realActions > 0).float()
-                    
-                    decisionLoss = nn.BCEWithLogitsLoss()(predictedOrderDecision.squeeze(-1), realOrderDecision)
-                    
-                    predictedActionScaled = self.model._scale_field(predictedAction.squeeze(-1), "orderQuantity")
-                    realActionsScaled = self.model._scale_field(realActions, "orderQuantity")
-                    
-                    orderMask = (realActions > 0).float()
-                    quantityLoss = nn.MSELoss(reduction='none')(predictedActionScaled, realActionsScaled)
-                    quantityLoss = (quantityLoss * orderMask).sum() / (orderMask.sum() + 1e-8)
-                    
-                    loss = decisionLoss + quantityLoss
-
-                loss.backward()
-                self.optimizer.step()
-                self.optimizer.zero_grad()
                 
-                epochLoss += loss.detach().item()
+                # Fase 1: Generar trayectoria completa y guardar datos de cada timestep
+                for step in range(trajectoryLength):
+                    td = self.model.forward(td)
+                    
+                    # Guardar todo lo necesario para este timestep específico
+                    step_data = {
+                        'states_emb': td["statesEmbedding"].clone().detach(),
+                        'actions_emb': td["actionsEmbedding"].clone().detach(),
+                        'old_log_prob': td["actionLogProb"].detach(),
+                        'action_scaled': self.model._scale_field(td["predictedAction"], "orderQuantity").detach(),
+                        'order_decision': (td["predictedAction"] > 0).float().detach()
+                    }
+                    
+                    if td["benefit"].size(1) > 0:
+                        if step == 0:
+                            reward = td["benefit"][:, -1].squeeze(-1)
+                        else:
+                            reward = (td["benefit"][:, -1] - td["benefit"][:, -2]).squeeze(-1)
+                        value = td["benefit"][:, -1].squeeze(-1)
+                    else:
+                        reward = torch.zeros(td["onHandLevel"].size(0), device=self.device)
+                        value = torch.zeros(td["onHandLevel"].size(0), device=self.device)
+                    
+                    step_data['reward'] = reward
+                    step_data['value'] = value
+                    step_data['done'] = torch.ones(td["onHandLevel"].size(0), device=self.device) if step == trajectoryLength - 1 else torch.zeros(td["onHandLevel"].size(0), device=self.device)
+                    
+                    timestep_data.append(step_data)
+                
+                # Stackear para GAE
+                old_log_probs = torch.stack([t['old_log_prob'] for t in timestep_data], dim=1)
+                rewards = torch.stack([t['reward'] for t in timestep_data], dim=1)
+                values = torch.stack([t['value'] for t in timestep_data], dim=1)
+                dones = torch.stack([t['done'] for t in timestep_data], dim=1)
+                
+                next_value = torch.zeros(self.nBatch, device=self.device)
+                advantages, returns = self.compute_gae(rewards, values, dones, next_value)
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+                
+                # Fase 2: PPO epochs - recalcular log_probs para cada timestep
+                total_loss = 0
+                total_policy_loss = 0
+                total_entropy = 0
+                
+                for ppo_epoch in range(self.ppo_epochs):
+                    new_log_probs_list = []
+                    new_order_dists_list = []
+                    new_quantity_dists_list = []
+                    
+                    # Recalcular log_probs para cada timestep usando embeddings guardados
+                    for step in range(trajectoryLength):
+                        step_data = timestep_data[step]
+                        
+                        # Obtener nuevas distribuciones usando embeddings de este timestep
+                        order_dist, quantity_dist, order_logit = self.model.forward_from_embeddings(
+                            step_data['states_emb'], 
+                            step_data['actions_emb']
+                        )
+                        
+                        # Recalcular log_prob de la acción TOMADA en este timestep
+                        order_log_prob = order_dist.log_prob(step_data['order_decision'])
+                        quantity_log_prob = quantity_dist.log_prob(step_data['action_scaled'])
+                        new_log_prob = order_log_prob + step_data['order_decision'] * quantity_log_prob
+                        
+                        new_log_probs_list.append(new_log_prob)
+                        new_order_dists_list.append(order_dist)
+                        new_quantity_dists_list.append(quantity_dist)
+                    
+                    new_log_probs = torch.stack(new_log_probs_list, dim=1)
+                    
+                    loss, policy_loss, entropy = self.compute_ppo_loss(
+                        old_log_probs, new_log_probs, advantages,
+                        new_order_dists_list, new_quantity_dists_list
+                    )
+                    
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 0.5)
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
+                    
+                    total_loss += loss.detach().item()
+                    total_policy_loss += policy_loss.detach().item()
+                    total_entropy += entropy.detach().item()
+                
+                avg_loss = total_loss / self.ppo_epochs
+                avg_policy_loss = total_policy_loss / self.ppo_epochs
+                avg_entropy = total_entropy / self.ppo_epochs
+                
+                epochLoss += avg_loss
+                epoch_policy_loss += avg_policy_loss
+                epoch_entropy += avg_entropy
                 
                 if currentStep in progress_checkpoints:
                     progress_pct = int((currentStep / self.stepsPerEpoch) * 100)
                     avg_loss_so_far = epochLoss / currentStep
-                    avg_decision_loss = decisionLoss.detach().item()
-                    avg_quantity_loss = quantityLoss.detach().item()
-                    print(f"Epoch {epoch} - Progreso: {progress_pct}% | Loss total: {avg_loss_so_far:.6f} | Decision loss: {avg_decision_loss:.6f} | Quantity loss: {avg_quantity_loss:.6f}")
+                    avg_policy_loss_so_far = epoch_policy_loss / currentStep
+                    avg_entropy_so_far = epoch_entropy / currentStep
+                    print(f"Epoch {epoch} - Progreso: {progress_pct}% | Loss: {avg_loss_so_far:.6f} | Policy loss: {avg_policy_loss_so_far:.6f} | Entropy: {avg_entropy_so_far:.6f}")
                 
                 currentStep += 1
             
@@ -430,8 +506,8 @@ if __name__ == "__main__":
         # Crear el modelo con los parámetros de escalado
         model = DecisionTransformer(
             decisionTransformerConfig=DecisionTransformerConfig(
-                hidden_size=32,
-                n_head=1,
+                hidden_size=96,
+                n_head=2,
             ),
             scaling_params=scaling_params)
         
@@ -443,11 +519,11 @@ if __name__ == "__main__":
             optimizer,
             start_factor=1.0,  # Factor inicial (5e-4)
             end_factor=0.01,    # Factor final (2.5e-4 / 5e-4 = 0.5)
-            total_iters=300    # Mucho menos agresivo
+            total_iters=50    # Mucho menos agresivo
         )
         
         config = TrainerConfig(
-            nBatch=128,
+            nBatch=16,
             nVal=1000, 
             stepsPerEpoch=100000//128 * 3,
             trainStrategy=DTTrainingStrategy(dataPath=data_paths),
@@ -457,7 +533,7 @@ if __name__ == "__main__":
         )
         trainer = DecisionTransformerTrainer(
             savePath="./training_models/",  # Cambiado a training_models
-            name="decision_transformer_model_32_1",  # Nombre más descriptivo
+            name="decision_transformer_model",  # Nombre más descriptivo
             model=model,
             trainerConfig=config
         )

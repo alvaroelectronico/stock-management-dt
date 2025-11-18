@@ -1,13 +1,13 @@
 import torch.nn as nn
 import torch
 import numpy as np
-import sys
 from tensordict import TensorDict
 from generate_trajectories import RETURN_TO_GO_WINDOW, FORECAST_LENGTH, MAX_LEAD_TIME, TRAJECTORY_LENGTH
 from transformers import DecisionTransformerGPT2Model
 from decision_transformer_config import DecisionTransformerConfig
 from pathlib import Path
 from typing import Dict, Optional, Tuple
+from torch.distributions import Normal, Bernoulli
 from data_scaler import (
     scale_on_hand_level, unscale_on_hand_level,
     scale_holding_cost, unscale_holding_cost,
@@ -26,13 +26,29 @@ from data_scaler import (
 
 def getTorchDevice():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    #return torch.device("cpu")
 
 def loadModel(path, decisionTransformerConfig, scaling_params=None):
+    """
+    Carga un modelo DecisionTransformer desde un checkpoint.
+    
+    Args:
+        path: Ruta al archivo del checkpoint
+        decisionTransformerConfig: Configuración del modelo
+        scaling_params: Parámetros de escalado (opcional). Si no se proporcionan,
+                       se intentan cargar desde el checkpoint.
+    
+    Returns:
+        Modelo DecisionTransformer cargado
+    """
     checkpoint = torch.load(path, weights_only=False)
     model = DecisionTransformer(decisionTransformerConfig, scaling_params=scaling_params)
     model.load_state_dict(checkpoint["model_state"])
+    
+    # Si no se proporcionaron scaling_params y están en el checkpoint, usarlos
     if scaling_params is None and "scaling_params" in checkpoint:
         model.scaling_params = checkpoint["scaling_params"]
+    
     return model  
 
 
@@ -47,7 +63,7 @@ class DecisionTransformer(nn.Module):
 
         self.maxSeqLength = 30
 
-        self.projectScalarData= nn.Linear(6, self.embeddingDim)
+        self.projectScalarData = nn.Linear(5, self.embeddingDim)
         self.projectStockInTransitData= nn.Linear(1, self.embeddingDim)
         self.projectDemandData = nn.Linear(1, self.embeddingDim)
         
@@ -65,21 +81,34 @@ class DecisionTransformer(nn.Module):
         self.embeddingReturnsToGo = nn.Linear(1, self.embeddingDim)
         self.embeddingAction = nn.Linear(1, self.embeddingDim)  
 
-        self.outputProjection = nn.Linear(self.embeddingDim, 1)  
+        self.outputMean = nn.Linear(self.embeddingDim, 1)  
+        self.outputStd = nn.Linear(self.embeddingDim, 1)
         self.outputOrder = nn.Linear(self.embeddingDim, 1)
         self.sigmoid = nn.Sigmoid()
         self.softplus = nn.Softplus()
     
+        # Parámetros de escalado
         self.scaling_params = scaling_params if scaling_params is not None else {}
 
         self.transformer = DecisionTransformerGPT2Model(decisionTransformerConfig)
 
     def _scale_field(self, data: torch.Tensor, field_name: str) -> torch.Tensor:
+        """
+        Escala un campo usando los parámetros almacenados.
+        
+        Args:
+            data: Tensor a escalar
+            field_name: Nombre del campo a escalar
+        
+        Returns:
+            Tensor escalado
+        """
         if field_name not in self.scaling_params:
             return data
         
         params = self.scaling_params[field_name]
         
+        # orderQuantity usa Min-Max (min_val, max_val) en lugar de Z-Score (mean, std)
         if field_name == 'orderQuantity':
             min_val, max_val = params
             return scale_order_quantity(data, min_val, max_val)
@@ -104,11 +133,22 @@ class DecisionTransformer(nn.Module):
         return data
 
     def _unscale_field(self, data: torch.Tensor, field_name: str) -> torch.Tensor:
+        """
+        Desescala un campo usando los parámetros almacenados.
+        
+        Args:
+            data: Tensor a desescalar
+            field_name: Nombre del campo a desescalar
+        
+        Returns:
+            Tensor desescalado
+        """
         if field_name not in self.scaling_params:
             return data
         
         params = self.scaling_params[field_name]
         
+        # orderQuantity usa Min-Max (min_val, max_val) en lugar de Z-Score (mean, std)
         if field_name == 'orderQuantity':
             min_val, max_val = params
             return unscale_order_quantity(data, min_val, max_val)
@@ -132,16 +172,17 @@ class DecisionTransformer(nn.Module):
             return unscale_funcs[field_name](data, mean, std)
         return data
 
+
     def initModel(self, td): 
-        batchSize = td["leadTime"].size(0)   
+        batchSize = td["leadTime"].size(0)
         device = getTorchDevice()
         if hasattr(td, 'clone'):
             tdNew = td.clone()
         else:
             tdNew = {k: v.clone() for k, v in td.items()}
 
-        tdNew["currentTimestep"] = torch.zeros((batchSize, 1), dtype=torch.long)
-        tdNew["orderQuantity"] = torch.zeros((batchSize, 1), dtype=torch.float32)
+        tdNew["currentTimestep"] = torch.zeros((batchSize, 1), dtype=torch.long, device=device)
+        tdNew["orderQuantity"] = torch.zeros((batchSize, 1), dtype=torch.float32, device=device)
         tdNew["onHandLevel"] = td["onHandLevel"]
         tdNew["inTransitStock"] = td["inTransitStock"][:, 0, :]
         tdNew["forecast"] = td["forecast"]
@@ -149,172 +190,132 @@ class DecisionTransformer(nn.Module):
         tdNew["stockOutPenalty"] = td["stockOutPenalty"]
         tdNew["unitRevenue"] = td["unitRevenue"]
         tdNew["leadTime"] = td["leadTime"]
-        tdNew["benefit"] = torch.zeros((batchSize, 1), dtype=torch.float32)
-        tdNew["cumulativeSales"] = torch.zeros((batchSize, 0), dtype=torch.float32)
-        tdNew["cumulativeHoldingCost"] = torch.zeros((batchSize, 0, 1), dtype=torch.float32)
-        tdNew["cumulativeOrderingCost"] = torch.zeros((batchSize, 0, 1), dtype=torch.float32)
-        tdNew["cumulativeStockOutCost"] = torch.zeros((batchSize, 0, 1), dtype=torch.float32)
-        tdNew["returnsToGo"] = td["returnsToGo"]
-        tdNew["predictedAction"] = torch.zeros(batchSize, 1, dtype=torch.float32)
+        tdNew["benefit"] = torch.zeros((batchSize, 0, 1), dtype=torch.float32, device=device)
+        tdNew["cumulativeSales"] = torch.zeros((batchSize, 0), dtype=torch.float32, device=device)
+        tdNew["cumulativeHoldingCost"] = torch.zeros((batchSize, 0, 1), dtype=torch.float32, device=device)
+        tdNew["cumulativeOrderingCost"] = torch.zeros((batchSize, 0, 1), dtype=torch.float32, device=device)
+        tdNew["cumulativeStockOutCost"] = torch.zeros((batchSize, 0, 1), dtype=torch.float32, device=device)
+        tdNew["predictedAction"] = torch.zeros(batchSize, 1, dtype=torch.float32, device=device)
         tdNew["demand"] = td["demand"]
 
         tdNew["statesEmbedding"] = torch.zeros((batchSize, 0, self.embeddingDim), dtype=torch.float, device=device)
         tdNew["actionsEmbedding"] = torch.zeros((batchSize, 0, self.embeddingDim), dtype=torch.float, device=device)
         tdNew["returnsToGoEmbedding"] = torch.zeros((batchSize, 0, self.embeddingDim), dtype=torch.float, device=device)
-                             
+        
+        tdNew["saved_returnsToGo"] = []
+        tdNew["saved_actions"] = []
+        tdNew["saved_statesEmbedding"] = []
+        tdNew["saved_forecast"] = []
+        tdNew["saved_inTransitStock"] = []
+        tdNew["saved_onHandLevel"] = []
         return tdNew
-    
-    def non_constructive_forward(self, td):
-        returnsToGoEmbedding = td["returnsToGoEmbedding"]
+   
+    def forward(self, td):
+        """
+        Forward pass del modelo para entrenamiento con RL clásico.
+        Siempre calcula las trayectorias, genera acciones y actualiza los estados.
+        
+        Args:
+            td: TensorDict con el estado actual
+        """
+        batchSize = td["statesEmbedding"].size(0)
+        
+        
+        onHandLevelScaled = self._scale_field(td["onHandLevel"], "onHandLevel")
+        holdingCostScaled = self._scale_field(td["holdingCost"], "holdingCost")
+        orderingCostScaled = self._scale_field(td["orderingCost"], "orderingCost")
+        stockOutPenaltyScaled = self._scale_field(td["stockOutPenalty"], "stockOutPenalty")
+        leadTimeScaled = self._scale_field(td["leadTime"], "leadTime")
+        
+        scalarData = torch.cat([
+            onHandLevelScaled.unsqueeze(-1),
+            holdingCostScaled.unsqueeze(-1),
+            orderingCostScaled.unsqueeze(-1),
+            stockOutPenaltyScaled.unsqueeze(-1),
+            leadTimeScaled.unsqueeze(-1)
+            ], dim=-1)
+
+        forecastScaled = self._scale_field(td["forecast"][:, 0, :], "forecast")
+        demandData = forecastScaled.unsqueeze(-1)
+        
+        inTransitStockScaled = self._scale_field(td["inTransitStock"].float(), "inTransitStock")
+        stockInTransitData = inTransitStockScaled.unsqueeze(-1)
+        
+        scalarDataProjection = self.projectScalarData(scalarData)
+        demandDataProjection = self.projectDemandData(demandData)
+        stockInTransitDataProjection = self.projectStockInTransitData(stockInTransitData)
+
+        demandTimeIndices = torch.arange(FORECAST_LENGTH, device=td["forecast"].device).long()
+        demandTimeProjection = self.demandTimeEmbedding(demandTimeIndices)
+
+        stockTimeIndices = torch.arange(MAX_LEAD_TIME, device=td["forecast"].device).long()
+        stockTimeProjection = self.stockInTransitTimeEmbedding(stockTimeIndices)
+
+        demandTimeEmbedding = demandDataProjection + demandTimeProjection.unsqueeze(0)
+
+        stockInTransitTimeEmbedding = stockInTransitDataProjection + stockTimeProjection.unsqueeze(0)
+        demandStockTimeEmbedding = torch.cat([demandTimeEmbedding, stockInTransitTimeEmbedding], dim=1)
+
+        mhaState, _ = self.mhaState(
+            query=scalarDataProjection.unsqueeze(1),
+            key=demandStockTimeEmbedding,
+            value=demandStockTimeEmbedding 
+            )
+
+        td["statesEmbedding"] = self.addSequenceData(td, td["statesEmbedding"], mhaState)
+        
         statesEmbedding = td["statesEmbedding"]
         actionsEmbedding = td["actionsEmbedding"]
-        
+
         positions = torch.arange(statesEmbedding.size(1), device=self.device)
         positionsEmbeddings = self.positionTimeEmbedding(positions)
         positionsEmbeddings = positionsEmbeddings.unsqueeze(0).expand(statesEmbedding.size(0), -1, -1)
-        
+
         statesEmbedding = statesEmbedding + positionsEmbeddings
-        returnsToGoEmbedding = returnsToGoEmbedding + positionsEmbeddings
         actionsEmbedding = actionsEmbedding + positionsEmbeddings[:, :actionsEmbedding.size(1), :]
-        batchSize = statesEmbedding.size(0)
-        
         stackedInputs = (
-            torch.stack((returnsToGoEmbedding, statesEmbedding,
-                            torch.cat((actionsEmbedding,
+            torch.stack((statesEmbedding,
+                        torch.cat((actionsEmbedding,
                                     torch.zeros(batchSize, statesEmbedding.size(1) - actionsEmbedding.size(1), self.embeddingDim, device=self.device)), dim=1)),
                         dim=1)
             .permute(0, 2, 1, 3)
-            .reshape(batchSize, 3 * statesEmbedding.size(1), self.embeddingDim)
+            .reshape(batchSize, 2 * statesEmbedding.size(1), self.embeddingDim)
         )
     
         output = self.transformer(inputs_embeds=stackedInputs) 
         output = output["last_hidden_state"]
-        output = output.reshape(batchSize, statesEmbedding.size(1), 3, self.embeddingDim).permute(0, 2, 1, 3)
-        output = output[:, 1, :, :]
-        predictedActionScaled = self.outputProjection(output)
+        output = output.reshape(batchSize, statesEmbedding.size(1), 2, self.embeddingDim).permute(0, 2, 1, 3)
+        output = output[:, 0, -1, :]
+        predictedMean = self.softplus(self.outputMean(output))
+        predictedStd = self.softplus(self.outputStd(output))
+        
         orderAction = self.outputOrder(output)
-        predictedActionScaled = self.softplus(predictedActionScaled)
+        td["orderLogit"] = orderAction
+        orderAction = self.sigmoid(orderAction)
+        orderOrNot = Bernoulli(orderAction)
+        predictedValue = Normal(predictedMean, predictedStd)
+        
+        orderDecision = orderOrNot.sample()
+        quantityValue = predictedValue.sample()
+        predictedActionScaled = orderDecision * quantityValue
+        
+        orderLogProb = orderOrNot.log_prob(orderDecision)
+        quantityLogProb = predictedValue.log_prob(quantityValue)
+        totalLogProb = orderLogProb + orderDecision * quantityLogProb
         
         predictedAction = self._unscale_field(predictedActionScaled, "orderQuantity")
-        td["orderQuantity"] = predictedAction
+        predictedAction = torch.ceil(predictedAction).long().float()
+        orderQuantity = predictedAction
+
+        td["orderQuantity"] = orderQuantity
         td["predictedAction"] = predictedAction
-        td["predictedOrderDecision"] = orderAction
-        
-   
-    def forward(self, td, nextOrderQuantity=None, is_test=False, update_only=False):
-        """
-        Forward pass del modelo con tres modos:
-        1. Entrenamiento (self.training=True, is_test=False): Usa acciones reales y actualiza pesos
-        2. Validación (self.training=False, is_test=False): Usa acciones reales sin actualizar pesos
-        3. Test (is_test=True): Usa predicciones del modelo sin actualizar pesos
-        
-        Args:
-            td: TensorDict con el estado actual
-            nextOrderQuantity: Acción real para el siguiente paso (usado en entrenamiento y validación)
-            is_test: Si True, usa predicciones del modelo
-            update_only: Si True, solo actualiza el estado sin calcular predicciones
-        """
-        batchSize = td["statesEmbedding"].size(0)
-        
-        if not is_test and nextOrderQuantity is None and not update_only:
-            raise ValueError("nextOrderQuantity debe ser proporcionado cuando is_test=False y update_only=False")
-
-        if not update_only:
-            onHandLevelScaled = self._scale_field(td["onHandLevel"], "onHandLevel")
-            holdingCostScaled = self._scale_field(td["holdingCost"], "holdingCost")
-            orderingCostScaled = self._scale_field(td["orderingCost"], "orderingCost")
-            stockOutPenaltyScaled = self._scale_field(td["stockOutPenalty"], "stockOutPenalty")
-            leadTimeScaled = self._scale_field(td["leadTime"], "leadTime")
-            
-            scalarData = torch.cat([
-                onHandLevelScaled.unsqueeze(-1),
-                holdingCostScaled.unsqueeze(-1),
-                orderingCostScaled.unsqueeze(-1),
-                stockOutPenaltyScaled.unsqueeze(-1),
-                leadTimeScaled.unsqueeze(-1)
-                ], dim=-1)
-
-            forecastScaled = self._scale_field(td["forecast"][:, 0, :], "forecast")
-            demandData = forecastScaled.unsqueeze(-1)
-            inTransitStockScaled = self._scale_field(td["inTransitStock"].float(), "inTransitStock")
-            stockInTransitData = inTransitStockScaled.unsqueeze(-1)
-            scalarDataProjection = self.projectScalarData(scalarData)
-            demandDataProjection = self.projectDemandData(demandData)
-            stockInTransitDataProjection = self.projectStockInTransitData(stockInTransitData)
-
-            demandTimeIndices = torch.arange(FORECAST_LENGTH, device=td["forecast"].device).long()
-            demandTimeProjection = self.demandTimeEmbedding(demandTimeIndices)
-
-            stockTimeIndices = torch.arange(MAX_LEAD_TIME, device=td["forecast"].device).long()
-            stockTimeProjection = self.stockInTransitTimeEmbedding(stockTimeIndices)
-
-            demandTimeEmbedding = demandDataProjection + demandTimeProjection.unsqueeze(0)
-
-            stockInTransitTimeEmbedding = stockInTransitDataProjection + stockTimeProjection.unsqueeze(0)
-            demandStockTimeEmbedding = torch.cat([demandTimeEmbedding, stockInTransitTimeEmbedding], dim=1)
-
-            mhaState, _ = self.mhaState(
-                query=scalarDataProjection.unsqueeze(1),
-                key=demandStockTimeEmbedding,
-                value=demandStockTimeEmbedding 
-                )
-
-            td["statesEmbedding"] = self.addSequenceData(td, td["statesEmbedding"], mhaState)
-            returnsToGo = td["returnsToGo"].clone().float().unsqueeze(-1)
-            returnsToGoScaled = self._scale_field(returnsToGo, "returnsToGo")
-            embeddingsReturnsToGo = self.embeddingReturnsToGo(returnsToGoScaled).unsqueeze(1)
-            
-            td["returnsToGoEmbedding"] = self.addSequenceData(td, td["returnsToGoEmbedding"],
-                                                            embeddingsReturnsToGo)
-            
-            statesEmbedding = td["statesEmbedding"]
-            returnsToGoEmbedding = td["returnsToGoEmbedding"]
-            actionsEmbedding = td["actionsEmbedding"]
-
-            if is_test:
-                positions = torch.arange(statesEmbedding.size(1), device=self.device)
-                positionsEmbeddings = self.positionTimeEmbedding(positions)
-                positionsEmbeddings = positionsEmbeddings.unsqueeze(0).expand(statesEmbedding.size(0), -1, -1)
-
-                statesEmbedding = statesEmbedding + positionsEmbeddings
-                returnsToGoEmbedding = returnsToGoEmbedding + positionsEmbeddings
-                actionsEmbedding = actionsEmbedding + positionsEmbeddings[:, :actionsEmbedding.size(1), :]
-                stackedInputs = (
-                    torch.stack((returnsToGoEmbedding, statesEmbedding,
-                                torch.cat((actionsEmbedding,
-                                            torch.zeros(batchSize, statesEmbedding.size(1) - actionsEmbedding.size(1), self.embeddingDim, device=self.device)), dim=1)),
-                                dim=1)
-                    .permute(0, 2, 1, 3)
-                    .reshape(batchSize, 3 * statesEmbedding.size(1), self.embeddingDim)
-                )
-            
-                output = self.transformer(inputs_embeds=stackedInputs)
-                output = output["last_hidden_state"]
-                output = output.reshape(batchSize, statesEmbedding.size(1), 3, self.embeddingDim).permute(0, 2, 1, 3)
-                output = output[:, 1, -1, :]
-                predictedActionScaled = self.outputProjection(output)
-                orderAction = self.outputOrder(output)
-                orderAction = self.sigmoid(orderAction)
-                predictedActionScaled = self.softplus(predictedActionScaled) * (orderAction >= 0.5)
-                
-                predictedAction = self._unscale_field(predictedActionScaled, "orderQuantity")
-                predictedAction = torch.ceil(predictedAction).long().float()
-                orderQuantity = predictedAction
-            else:
-                predictedAction = torch.zeros(batchSize, 1, device=self.device)
-                orderQuantity = nextOrderQuantity
-
-        if not update_only:
-            td["orderQuantity"] = orderQuantity
-            td["predictedAction"] = predictedAction
-        
-            orderQuantityScaled = self._scale_field(orderQuantity, "orderQuantity")
-            actionEmbedding = self.embeddingAction(orderQuantityScaled).unsqueeze(1)
-            td["actionsEmbedding"] = self.addSequenceData(td, td["actionsEmbedding"], actionEmbedding)
-        else:
-            orderQuantity = nextOrderQuantity
-
-        currentTimeStep = td["currentTimestep"].long()
+        td["actionLogProb"] = totalLogProb
+        td["orderDistribution"] = orderOrNot
+        td["quantityDistribution"] = predictedValue
+    
+        orderQuantityScaled = self._scale_field(orderQuantity, "orderQuantity")
+        actionEmbedding = self.embeddingAction(orderQuantityScaled).unsqueeze(1)
+        td["actionsEmbedding"] = self.addSequenceData(td, td["actionsEmbedding"], actionEmbedding)
         
         stockToArrive = td["inTransitStock"][:, 0]
         td["onHandLevel"] = td["onHandLevel"] + stockToArrive
@@ -335,7 +336,6 @@ class DecisionTransformer(nn.Module):
         stockout = torch.clamp(current_demand - current_stock, min=0).unsqueeze(-1)
         income = (td["unitRevenue"] * sales).unsqueeze(-1)
         
-        # Actualizar ventas acumuladas
         if td["cumulativeSales"].size(1) == 0:
             td["cumulativeSales"] = sales.unsqueeze(-1)
         else:
@@ -343,7 +343,7 @@ class DecisionTransformer(nn.Module):
         
         td["onHandLevel"] = current_stock - sales
         orderingCost = torch.where(
-            orderQuantity.squeeze(-1) > 0,
+            td["orderQuantity"].squeeze(-1) > 0,
             td["orderingCost"],
             torch.zeros_like(td["orderingCost"])
         ).unsqueeze(-1)
@@ -373,27 +373,6 @@ class DecisionTransformer(nn.Module):
 
         td["forecast"] = torch.roll(td["forecast"], shifts=-1, dims=1)
         td["demand"] = torch.roll(td["demand"], shifts=-1, dims=-1)
-        td["returnsToGo"] = td["returnsToGo"] + holdingCost + stockoutPenalty + orderingCost
-
-        if is_test:
-            if not hasattr(self, 'test_metrics'):
-                self.test_metrics = {
-                    'holding_costs': [],
-                    'ordering_costs': [],
-                    'stockout_costs': [],
-                    'sales_revenue': [],
-                    'total_costs': [],
-                    'on_hand_levels': [],
-                    'in_transit_levels': []
-                }
-            
-            self.test_metrics['holding_costs'].append(td["holdingCost"].mean().item())
-            self.test_metrics['ordering_costs'].append(td["orderingCost"].mean().item())
-            self.test_metrics['stockout_costs'].append(td["stockOutPenalty"].mean().item())
-            self.test_metrics['sales_revenue'].append(td["unitRevenue"].mean().item())
-            self.test_metrics['total_costs'].append((td["holdingCost"] * current_stock + td["stockOutPenalty"] * torch.max(torch.zeros_like(current_demand), current_demand - current_stock)).mean().item())
-            self.test_metrics['on_hand_levels'].append(td["onHandLevel"].mean().item())
-            self.test_metrics['in_transit_levels'].append(td["inTransitStock"].mean().item())
 
         return td
 
@@ -425,5 +404,37 @@ class DecisionTransformer(nn.Module):
             
         return result
     
-    def setInitalReturnToGo(self, td, returnsToGo):
-        td["returnsToGo"] = returnsToGo if returnsToGo is not None else torch.zeros(self.batchSize, device=self.device)
+    
+    def forward_from_embeddings(self, statesEmbedding, actionsEmbedding):
+        batchSize = statesEmbedding.size(0)
+        
+        positions = torch.arange(statesEmbedding.size(1), device=self.device)
+        positionsEmbeddings = self.positionTimeEmbedding(positions)
+        positionsEmbeddings = positionsEmbeddings.unsqueeze(0).expand(statesEmbedding.size(0), -1, -1)
+        
+        statesEmbedding = statesEmbedding + positionsEmbeddings
+        actionsEmbedding = actionsEmbedding + positionsEmbeddings[:, :actionsEmbedding.size(1), :]
+        
+        stackedInputs = (
+            torch.stack((statesEmbedding,
+                        torch.cat((actionsEmbedding,
+                                    torch.zeros(batchSize, statesEmbedding.size(1) - actionsEmbedding.size(1), self.embeddingDim, device=self.device)), dim=1)),
+                        dim=1)
+            .permute(0, 2, 1, 3)
+            .reshape(batchSize, 2 * statesEmbedding.size(1), self.embeddingDim)
+        )
+    
+        output = self.transformer(inputs_embeds=stackedInputs) 
+        output = output["last_hidden_state"]
+        output = output.reshape(batchSize, statesEmbedding.size(1), 2, self.embeddingDim).permute(0, 2, 1, 3)
+        output = output[:, 0, -1, :]
+        
+        predictedMean = self.softplus(self.outputMean(output))
+        predictedStd = self.softplus(self.outputStd(output))
+        orderLogit = self.outputOrder(output)
+        orderAction = self.sigmoid(orderLogit)
+        
+        orderDist = Bernoulli(orderAction)
+        quantityDist = Normal(predictedMean, predictedStd)
+        
+        return orderDist, quantityDist, orderLogit
