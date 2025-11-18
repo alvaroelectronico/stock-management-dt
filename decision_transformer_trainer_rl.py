@@ -169,14 +169,6 @@ class DecisionTransformerTrainer(Trainer):
         batch = self.nBatch
 
         self.model.eval()
-        all_test_benefits = []
-        all_real_benefits = []
-        all_test_holding_costs = []
-        all_real_holding_costs = []
-        all_test_stockout_costs = []
-        all_real_stockout_costs = []
-        all_test_ordering_costs = []
-        all_real_ordering_costs = []
         with torch.no_grad():
             if self.testStrategy is not None:
                 all_problem_data = self.testStrategy.problemData
@@ -186,6 +178,17 @@ class DecisionTransformerTrainer(Trainer):
                 length_data = self.trainStrategy.lengthData
             
             num_batches = length_data // batch
+            
+            # Preasignar tensors
+            all_test_benefits = torch.zeros(num_batches * batch, device='cpu')
+            all_real_benefits = torch.zeros(num_batches * batch, device='cpu')
+            all_test_holding_costs = torch.zeros(num_batches * batch, device='cpu')
+            all_real_holding_costs = torch.zeros(num_batches * batch, device='cpu')
+            all_test_stockout_costs = torch.zeros(num_batches * batch, device='cpu')
+            all_real_stockout_costs = torch.zeros(num_batches * batch, device='cpu')
+            all_test_ordering_costs = torch.zeros(num_batches * batch, device='cpu')
+            all_real_ordering_costs = torch.zeros(num_batches * batch, device='cpu')
+            
             for i in range(num_batches):
                 start_idx = i * batch
                 end_idx = min(start_idx + batch, length_data)
@@ -220,24 +223,25 @@ class DecisionTransformerTrainer(Trainer):
                 for step in range(trajectory_length):
                     test_td = self.model.forward(test_td)
                 
-                all_test_benefits.append(test_td["benefit"][:, -1].cpu())
-                all_real_benefits.append(real_benefits.cpu())
-                all_test_holding_costs.append(test_td["cumulativeHoldingCost"][:, -1].cpu())
-                all_real_holding_costs.append(real_holding_costs.cpu())
-                all_test_stockout_costs.append(test_td["cumulativeStockOutCost"][:, -1].cpu())
-                all_real_stockout_costs.append(real_stockout_costs.cpu())
-                all_test_ordering_costs.append(test_td["cumulativeOrderingCost"][:, -1].cpu())
-                all_real_ordering_costs.append(real_ordering_costs.cpu())
+                # Escribir directamente en los tensors preasignados
+                all_test_benefits[start_idx:end_idx] = test_td["benefit"][:, -1].cpu()
+                all_real_benefits[start_idx:end_idx] = real_benefits.cpu()
+                all_test_holding_costs[start_idx:end_idx] = test_td["cumulativeHoldingCost"][:, -1].cpu()
+                all_real_holding_costs[start_idx:end_idx] = real_holding_costs.cpu()
+                all_test_stockout_costs[start_idx:end_idx] = test_td["cumulativeStockOutCost"][:, -1].cpu()
+                all_real_stockout_costs[start_idx:end_idx] = real_stockout_costs.cpu()
+                all_test_ordering_costs[start_idx:end_idx] = test_td["cumulativeOrderingCost"][:, -1].cpu()
+                all_real_ordering_costs[start_idx:end_idx] = real_ordering_costs.cpu()
         
         self.model.train()
-        test_benefit_mean = torch.cat(all_test_benefits).mean().item()
-        real_benefit_mean = torch.cat(all_real_benefits).mean().item()
-        test_holding_cost_mean = torch.cat(all_test_holding_costs).mean().item()
-        real_holding_cost_mean = torch.cat(all_real_holding_costs).mean().item()
-        test_stockout_cost_mean = torch.cat(all_test_stockout_costs).mean().item()
-        real_stockout_cost_mean = torch.cat(all_real_stockout_costs).mean().item()
-        test_ordering_cost_mean = torch.cat(all_test_ordering_costs).mean().item()
-        real_ordering_cost_mean = torch.cat(all_real_ordering_costs).mean().item()
+        test_benefit_mean = all_test_benefits.mean().item()
+        real_benefit_mean = all_real_benefits.mean().item()
+        test_holding_cost_mean = all_test_holding_costs.mean().item()
+        real_holding_cost_mean = all_real_holding_costs.mean().item()
+        test_stockout_cost_mean = all_test_stockout_costs.mean().item()
+        real_stockout_cost_mean = all_real_stockout_costs.mean().item()
+        test_ordering_cost_mean = all_test_ordering_costs.mean().item()
+        real_ordering_cost_mean = all_real_ordering_costs.mean().item()
         
         return (test_benefit_mean, real_benefit_mean, test_holding_cost_mean, real_holding_cost_mean,
                 test_stockout_cost_mean, real_stockout_cost_mean, test_ordering_cost_mean, real_ordering_cost_mean)
@@ -245,7 +249,7 @@ class DecisionTransformerTrainer(Trainer):
     def compute_ppo_loss(self, old_log_probs, new_log_probs, advantages,
                          old_order_log_probs, new_order_log_probs,
                          old_quantity_log_probs, new_quantity_log_probs,
-                         order_decisions, new_order_dists, new_quantity_dists):
+                         order_decisions, order_entropies, quantity_entropies):
         """
         Calcula la pérdida PPO usando las log_probs combinadas de ambas cabezas.
         Las log_probs ya vienen sumadas correctamente: log_prob = order_log_prob + order_decision * quantity_log_prob
@@ -255,8 +259,6 @@ class DecisionTransformerTrainer(Trainer):
         surr2 = torch.clamp(ratio, 1.0 - self.ppo_clip, 1.0 + self.ppo_clip) * advantages.unsqueeze(-1)
         policy_loss = torch.min(surr1, surr2).mean()
          
-        order_entropies = torch.stack([dist.entropy().squeeze(-1) for dist in new_order_dists], dim=1)
-        quantity_entropies = torch.stack([dist.entropy().squeeze(-1) for dist in new_quantity_dists], dim=1)
         order_entropy = order_entropies.mean()
         quantity_entropy = quantity_entropies.mean()
         entropy = order_entropy + quantity_entropy
@@ -292,8 +294,19 @@ class DecisionTransformerTrainer(Trainer):
                 td = self.model.initModel(td)
                 
                 trajectoryLength = td['demand'].size(1)
+                batch_size = td['onHandLevel'].size(0)
                 
-                timestep_data = []
+                # Preasignar tensors para todos los timesteps
+                states_emb_buffer = torch.zeros(batch_size, trajectoryLength, td["statesEmbedding"].size(-1), 
+                                               device=self.device, dtype=td["statesEmbedding"].dtype)
+                actions_emb_buffer = torch.zeros(batch_size, trajectoryLength, td["actionsEmbedding"].size(-1), 
+                                                device=self.device, dtype=td["actionsEmbedding"].dtype)
+                old_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
+                old_order_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
+                old_quantity_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
+                order_decisions = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
+                quantity_values = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
+                benefits = torch.zeros(batch_size, trajectoryLength, device=self.device)
                 
                 self.model.train()
                 
@@ -306,25 +319,15 @@ class DecisionTransformerTrainer(Trainer):
                     old_order_log_prob = td["orderDistribution"].log_prob(order_decision).detach()
                     old_quantity_log_prob = td["quantityDistribution"].log_prob(quantity_value).detach()
                     
-                    step_data = {
-                        'states_emb': td["statesEmbedding"].clone().detach(),
-                        'actions_emb': td["actionsEmbedding"].clone().detach(),
-                        'old_log_prob': td["actionLogProb"].detach(),
-                        'old_order_log_prob': old_order_log_prob,
-                        'old_quantity_log_prob': old_quantity_log_prob,
-                        'quantity_value': quantity_value,
-                        'order_decision': order_decision,
-                        'benefit': td["benefit"][:, -1].squeeze(-1).detach()
-                    }
-                    
-                    timestep_data.append(step_data)
-                
-                # Calcular advantages directamente desde los benefits
-                old_log_probs = torch.stack([t['old_log_prob'] for t in timestep_data], dim=1)
-                old_order_log_probs = torch.stack([t['old_order_log_prob'] for t in timestep_data], dim=1)
-                old_quantity_log_probs = torch.stack([t['old_quantity_log_prob'] for t in timestep_data], dim=1)
-                order_decisions = torch.stack([t['order_decision'] for t in timestep_data], dim=1)
-                benefits = torch.stack([t['benefit'] for t in timestep_data], dim=1)
+                    # Escribir directamente en los buffers preasignados
+                    states_emb_buffer[:, step, :] = td["statesEmbedding"].detach()
+                    actions_emb_buffer[:, step, :] = td["actionsEmbedding"].detach()
+                    old_log_probs[:, step, :] = td["actionLogProb"].detach()
+                    old_order_log_probs[:, step, :] = old_order_log_prob
+                    old_quantity_log_probs[:, step, :] = old_quantity_log_prob
+                    quantity_values[:, step, :] = quantity_value
+                    order_decisions[:, step, :] = order_decision
+                    benefits[:, step] = td["benefit"][:, -1].squeeze(-1).detach()
                 
                 # Normalizar benefits para usarlos como advantages
                 advantages = (benefits - benefits.mean()) / (benefits.std() + 1e-8)
@@ -334,43 +337,39 @@ class DecisionTransformerTrainer(Trainer):
                 total_policy_loss = 0
                 total_entropy = 0
                 
+                # Preasignar tensors para nuevos log_probs
+                new_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
+                new_order_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
+                new_quantity_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
+                order_entropies = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
+                quantity_entropies = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
+                
                 for ppo_epoch in range(self.ppo_epochs):
-                    new_log_probs_list = []
-                    new_order_log_probs_list = []
-                    new_quantity_log_probs_list = []
-                    new_order_dists_list = []
-                    new_quantity_dists_list = []
-                    
                     # Recalcular log_probs para cada timestep usando embeddings guardados
                     for step in range(trajectoryLength):
-                        step_data = timestep_data[step]
-                        
                         # Obtener nuevas distribuciones usando embeddings de este timestep
                         order_dist, quantity_dist, order_logit = self.model.forward_from_embeddings(
-                            step_data['states_emb'], 
-                            step_data['actions_emb']
+                            states_emb_buffer[:, step, :], 
+                            actions_emb_buffer[:, step, :]
                         )
                         
                         # Recalcular log_probs separados de la acción TOMADA en este timestep
-                        new_order_log_prob = order_dist.log_prob(step_data['order_decision'])
-                        new_quantity_log_prob = quantity_dist.log_prob(step_data['quantity_value'])
-                        new_log_prob = new_order_log_prob + step_data['order_decision'] * new_quantity_log_prob
+                        new_order_log_prob = order_dist.log_prob(order_decisions[:, step, :])
+                        new_quantity_log_prob = quantity_dist.log_prob(quantity_values[:, step, :])
+                        new_log_prob = new_order_log_prob + order_decisions[:, step, :] * new_quantity_log_prob
                         
-                        new_log_probs_list.append(new_log_prob)
-                        new_order_log_probs_list.append(new_order_log_prob)
-                        new_quantity_log_probs_list.append(new_quantity_log_prob)
-                        new_order_dists_list.append(order_dist)
-                        new_quantity_dists_list.append(quantity_dist)
-                    
-                    new_log_probs = torch.stack(new_log_probs_list, dim=1)
-                    new_order_log_probs = torch.stack(new_order_log_probs_list, dim=1)
-                    new_quantity_log_probs = torch.stack(new_quantity_log_probs_list, dim=1)
+                        # Escribir directamente en los tensors preasignados
+                        new_log_probs[:, step, :] = new_log_prob
+                        new_order_log_probs[:, step, :] = new_order_log_prob
+                        new_quantity_log_probs[:, step, :] = new_quantity_log_prob
+                        order_entropies[:, step, :] = order_dist.entropy()
+                        quantity_entropies[:, step, :] = quantity_dist.entropy()
                     
                     loss, policy_loss, entropy = self.compute_ppo_loss(
                         old_log_probs, new_log_probs, advantages,
                         old_order_log_probs, new_order_log_probs,
                         old_quantity_log_probs, new_quantity_log_probs,
-                        order_decisions, new_order_dists_list, new_quantity_dists_list
+                        order_decisions, order_entropies, quantity_entropies
                     )
                     
                     loss.backward()
