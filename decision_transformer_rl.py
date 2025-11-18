@@ -312,6 +312,8 @@ class DecisionTransformer(nn.Module):
         td["actionLogProb"] = totalLogProb
         td["orderDistribution"] = orderOrNot
         td["quantityDistribution"] = predictedValue
+        td["orderDecision"] = orderDecision
+        td["quantityValue"] = quantityValue
     
         orderQuantityScaled = self._scale_field(orderQuantity, "orderQuantity")
         actionEmbedding = self.embeddingAction(orderQuantityScaled).unsqueeze(1)

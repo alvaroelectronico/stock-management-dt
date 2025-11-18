@@ -264,20 +264,26 @@ class DecisionTransformerTrainer(Trainer):
         returns = advantages + values
         return advantages, returns
     
-    def compute_ppo_loss(self, old_log_probs, new_log_probs, advantages, new_order_dists, new_quantity_dists):
+    def compute_ppo_loss(self, old_log_probs, new_log_probs, advantages,
+                         old_order_log_probs, new_order_log_probs,
+                         old_quantity_log_probs, new_quantity_log_probs,
+                         order_decisions, new_order_dists, new_quantity_dists):
+        """
+        Calcula la pérdida PPO usando las log_probs combinadas de ambas cabezas.
+        Las log_probs ya vienen sumadas correctamente: log_prob = order_log_prob + order_decision * quantity_log_prob
+        """ 
         ratio = torch.exp(new_log_probs - old_log_probs)
-        
         surr1 = ratio * advantages.unsqueeze(-1)
         surr2 = torch.clamp(ratio, 1.0 - self.ppo_clip, 1.0 + self.ppo_clip) * advantages.unsqueeze(-1)
-        policy_loss = -torch.min(surr1, surr2).mean()
-        
+        policy_loss = torch.min(surr1, surr2).mean()
+         
         order_entropies = torch.stack([dist.entropy().squeeze(-1) for dist in new_order_dists], dim=1)
         quantity_entropies = torch.stack([dist.entropy().squeeze(-1) for dist in new_quantity_dists], dim=1)
         order_entropy = order_entropies.mean()
         quantity_entropy = quantity_entropies.mean()
         entropy = order_entropy + quantity_entropy
         
-        loss = policy_loss - self.entropy_coef * entropy
+        loss = -policy_loss - self.entropy_coef * entropy
         
         return loss, policy_loss, entropy
 
@@ -309,22 +315,27 @@ class DecisionTransformerTrainer(Trainer):
                 
                 trajectoryLength = td['demand'].size(1)
                 
-                # Guardar datos por timestep
                 timestep_data = []
                 
                 self.model.train()
                 
-                # Fase 1: Generar trayectoria completa y guardar datos de cada timestep
                 for step in range(trajectoryLength):
                     td = self.model.forward(td)
                     
-                    # Guardar todo lo necesario para este timestep específico
+                    order_decision = td["orderDecision"].detach()
+                    quantity_value = td["quantityValue"].detach()
+                    
+                    old_order_log_prob = td["orderDistribution"].log_prob(order_decision).detach()
+                    old_quantity_log_prob = td["quantityDistribution"].log_prob(quantity_value).detach()
+                    
                     step_data = {
                         'states_emb': td["statesEmbedding"].clone().detach(),
                         'actions_emb': td["actionsEmbedding"].clone().detach(),
                         'old_log_prob': td["actionLogProb"].detach(),
-                        'action_scaled': self.model._scale_field(td["predictedAction"], "orderQuantity").detach(),
-                        'order_decision': (td["predictedAction"] > 0).float().detach()
+                        'old_order_log_prob': old_order_log_prob,
+                        'old_quantity_log_prob': old_quantity_log_prob,
+                        'quantity_value': quantity_value,
+                        'order_decision': order_decision
                     }
                     
                     if td["benefit"].size(1) > 0:
@@ -345,6 +356,9 @@ class DecisionTransformerTrainer(Trainer):
                 
                 # Stackear para GAE
                 old_log_probs = torch.stack([t['old_log_prob'] for t in timestep_data], dim=1)
+                old_order_log_probs = torch.stack([t['old_order_log_prob'] for t in timestep_data], dim=1)
+                old_quantity_log_probs = torch.stack([t['old_quantity_log_prob'] for t in timestep_data], dim=1)
+                order_decisions = torch.stack([t['order_decision'] for t in timestep_data], dim=1)
                 rewards = torch.stack([t['reward'] for t in timestep_data], dim=1)
                 values = torch.stack([t['value'] for t in timestep_data], dim=1)
                 dones = torch.stack([t['done'] for t in timestep_data], dim=1)
@@ -360,6 +374,8 @@ class DecisionTransformerTrainer(Trainer):
                 
                 for ppo_epoch in range(self.ppo_epochs):
                     new_log_probs_list = []
+                    new_order_log_probs_list = []
+                    new_quantity_log_probs_list = []
                     new_order_dists_list = []
                     new_quantity_dists_list = []
                     
@@ -373,20 +389,26 @@ class DecisionTransformerTrainer(Trainer):
                             step_data['actions_emb']
                         )
                         
-                        # Recalcular log_prob de la acción TOMADA en este timestep
-                        order_log_prob = order_dist.log_prob(step_data['order_decision'])
-                        quantity_log_prob = quantity_dist.log_prob(step_data['action_scaled'])
-                        new_log_prob = order_log_prob + step_data['order_decision'] * quantity_log_prob
+                        # Recalcular log_probs separados de la acción TOMADA en este timestep
+                        new_order_log_prob = order_dist.log_prob(step_data['order_decision'])
+                        new_quantity_log_prob = quantity_dist.log_prob(step_data['quantity_value'])
+                        new_log_prob = new_order_log_prob + step_data['order_decision'] * new_quantity_log_prob
                         
                         new_log_probs_list.append(new_log_prob)
+                        new_order_log_probs_list.append(new_order_log_prob)
+                        new_quantity_log_probs_list.append(new_quantity_log_prob)
                         new_order_dists_list.append(order_dist)
                         new_quantity_dists_list.append(quantity_dist)
                     
                     new_log_probs = torch.stack(new_log_probs_list, dim=1)
+                    new_order_log_probs = torch.stack(new_order_log_probs_list, dim=1)
+                    new_quantity_log_probs = torch.stack(new_quantity_log_probs_list, dim=1)
                     
                     loss, policy_loss, entropy = self.compute_ppo_loss(
                         old_log_probs, new_log_probs, advantages,
-                        new_order_dists_list, new_quantity_dists_list
+                        old_order_log_probs, new_order_log_probs,
+                        old_quantity_log_probs, new_quantity_log_probs,
+                        order_decisions, new_order_dists_list, new_quantity_dists_list
                     )
                     
                     loss.backward()
