@@ -165,8 +165,6 @@ def tryDecisionTransformer(model, problem, maxSteps=None):
     maxSteps = min(maxSteps, trajectoryLength)
     
     td = {k: v.clone() for k, v in problem.items()}
-    td["returnsToGo"] = torch.zeros_like(td["returnsToGo"])
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     td = model.initModel(td)
     
     results = []

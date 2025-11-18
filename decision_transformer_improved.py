@@ -356,7 +356,6 @@ class DecisionTransformer(nn.Module):
             raise ValueError("nextOrderQuantity debe ser proporcionado cuando is_test=False y update_only=False")
 
         if not update_only:
-            batch_size = batchSize
             if not is_test:
                 td["saved_returnsToGo"].append(td["returnsToGo"].clone())
                 td["saved_actions"].append(td["orderQuantity"].clone())
@@ -466,9 +465,6 @@ class DecisionTransformer(nn.Module):
             td["actionsEmbedding"] = self.addSequenceData(td, td["actionsEmbedding"], actionEmbedding)
         else:
             orderQuantity = nextOrderQuantity
-
-        currentTimeStep = td["currentTimestep"].long()
-        batch_size = batchSize
         
         stockToArrive = td["inTransitStock"][:, 0]
         td["onHandLevel"] = td["onHandLevel"] + stockToArrive
@@ -526,6 +522,7 @@ class DecisionTransformer(nn.Module):
 
         td["forecast"] = torch.roll(td["forecast"], shifts=-1, dims=1)
         td["demand"] = torch.roll(td["demand"], shifts=-1, dims=-1)
+        td["returnsToGo"] = td["returnsToGo"] + holdingCost + stockoutPenalty + orderingCost
 
         if is_test:
             if not hasattr(self, 'test_metrics'):

@@ -134,7 +134,6 @@ class DecisionTransformer(nn.Module):
 
     def initModel(self, td): 
         batchSize = td["leadTime"].size(0)   
-        leadTime = int(torch.max(td["leadTime"]).item())
         device = getTorchDevice()
         if hasattr(td, 'clone'):
             tdNew = td.clone()
@@ -216,15 +215,11 @@ class DecisionTransformer(nn.Module):
             update_only: Si True, solo actualiza el estado sin calcular predicciones
         """
         batchSize = td["statesEmbedding"].size(0)
-        leadTimeMax = MAX_LEAD_TIME
         
         if not is_test and nextOrderQuantity is None and not update_only:
             raise ValueError("nextOrderQuantity debe ser proporcionado cuando is_test=False y update_only=False")
 
         if not update_only:
-            batch_size = batchSize
-            currentTimeStep = td["currentTimestep"].long().squeeze(-1)
-            
             onHandLevelScaled = self._scale_field(td["onHandLevel"], "onHandLevel")
             holdingCostScaled = self._scale_field(td["holdingCost"], "holdingCost")
             orderingCostScaled = self._scale_field(td["orderingCost"], "orderingCost")
@@ -380,6 +375,7 @@ class DecisionTransformer(nn.Module):
 
         td["forecast"] = torch.roll(td["forecast"], shifts=-1, dims=1)
         td["demand"] = torch.roll(td["demand"], shifts=-1, dims=-1)
+        td["returnsToGo"] = td["returnsToGo"] + holdingCost + stockoutPenalty + orderingCost
 
         if is_test:
             if not hasattr(self, 'test_metrics'):

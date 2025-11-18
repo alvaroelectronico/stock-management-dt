@@ -209,7 +209,6 @@ class DecisionTransformerTrainer(Trainer):
                 
                 test_td = {k: v.clone() for k, v in test_problem.items()}
                 test_td = {k: v.to(self.device) for k, v in test_td.items()}
-                test_td["returnsToGo"] = torch.zeros((batch), device=self.device)
                 test_td = self.model.initModel(test_td)
                 trajectory_length = test_td['demand'].size(1)
 
@@ -259,7 +258,7 @@ class DecisionTransformerTrainer(Trainer):
                 problemData, orderQuantityData, returnsToGoData = dtData
                 
                 orderQuantityData = orderQuantityData.to(self.device)
-                returnsToGoData = torch.zeros_like(returnsToGoData)
+                #returnsToGoData = torch.zeros_like(returnsToGoData)
                 returnsToGoData = returnsToGoData.to(self.device)
                 td = {k: v.to(self.device) for k, v in problemData.items()}
                 
