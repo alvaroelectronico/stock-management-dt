@@ -495,10 +495,10 @@ def runDecisionTransformerTest(modelPath, dataPath, problemIndex=0, config=None,
 if __name__ == "__main__":
     projectDir = getProjectDirectory()
     config = DecisionTransformerConfig(
-        n_head=2,
-        hidden_size=96
+        n_head=1,
+        hidden_size=32
     )
-    modelPath = os.path.join(projectDir, "training_models/decision_transformer_model", "best.pt")
+    modelPath = os.path.join(projectDir, "training_models/decision_transformer_model_32_1_3", "best.pt")
     dataPath = os.path.join(projectDir, "data", "test_data.pt")
     outputPath = os.path.join(projectDir, "test_results.json")
     plotOutputPath = os.path.join(projectDir, "combined_plots.html")
@@ -517,7 +517,7 @@ if __name__ == "__main__":
         report = runDecisionTransformerTest(
             modelPath=modelPath,
             dataPath=dataPath,
-            problemIndex=13,#786,#643,#899,
+            problemIndex=643,#786,#643,#899,
             maxSteps=30,
             outputPath=outputPath,
             plotOutputPath=plotOutputPath,

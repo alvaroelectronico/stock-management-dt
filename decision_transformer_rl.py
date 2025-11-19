@@ -91,6 +91,7 @@ class DecisionTransformer(nn.Module):
         self.scaling_params = scaling_params if scaling_params is not None else {}
 
         self.transformer = DecisionTransformerGPT2Model(decisionTransformerConfig)
+        #self.outputOrder.bias.data.fill_(1.8)
 
     def _scale_field(self, data: torch.Tensor, field_name: str) -> torch.Tensor:
         """
@@ -301,8 +302,7 @@ class DecisionTransformer(nn.Module):
         
         orderLogProb = orderOrNot.log_prob(orderDecision)
         quantityLogProb = predictedValue.log_prob(quantityValue)
-        # Solo se contabiliza la log_prob de la cantidad cuando realmente se hace un pedido
-        totalLogProb = orderLogProb + orderDecision * quantityLogProb
+        totalLogProb = orderLogProb +  quantityLogProb * orderDecision
         
         predictedAction = self._unscale_field(predictedActionScaled, "orderQuantity")
         predictedAction = torch.ceil(predictedAction).long().float()
