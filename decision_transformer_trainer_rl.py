@@ -2,6 +2,7 @@ from torch import nn
 from decision_transformer_rl import DecisionTransformer
 from trainer import Trainer, TrainerConfig
 import torch
+import torch.nn.functional as F
 from decision_transformer_strategies import TrainingStrategy
 from decision_transformer_config import DecisionTransformerConfig
 from decision_transformer_strategies import DTTrainingStrategy
@@ -94,6 +95,8 @@ class DecisionTransformerTrainer(Trainer):
         self.ppo_clip = getattr(trainerConfig, 'ppo_clip', 0.2)
         self.ppo_epochs = getattr(trainerConfig, 'ppo_epochs', 2)
         self.entropy_coef = getattr(trainerConfig, 'entropy_coef', 0.01)
+        self.value_coef = getattr(trainerConfig, 'value_coef', 0.5)
+        self.gamma = getattr(trainerConfig, 'gamma', 0.99)
 
     def createModel(self):
         """
@@ -246,30 +249,61 @@ class DecisionTransformerTrainer(Trainer):
         return (test_benefit_mean, real_benefit_mean, test_holding_cost_mean, real_holding_cost_mean,
                 test_stockout_cost_mean, real_stockout_cost_mean, test_ordering_cost_mean, real_ordering_cost_mean)
 
-    def compute_ppo_loss(self, old_log_probs, new_log_probs, advantages,
-                         old_order_log_probs, new_order_log_probs,
-                         old_quantity_log_probs, new_quantity_log_probs,
-                         order_decisions, order_entropies, quantity_entropies):
+    def compute_ppo_loss(
+        self,
+        old_log_probs,
+        new_log_probs,
+        advantages,
+        old_order_log_probs,
+        new_order_log_probs,
+        old_quantity_log_probs,
+        new_quantity_log_probs,
+        order_decisions,
+        order_entropies,
+        quantity_entropies,
+        new_values,
+        returns,
+    ):
         """
-        Calcula la pérdida PPO usando las log_probs combinadas de ambas cabezas.
-        Las log_probs ya vienen sumadas correctamente: log_prob = order_log_prob + order_decision * quantity_log_prob
-        """ 
+        Calcula la pérdida PPO con ventajas por paso y pérdida de valor escalar.
+        
+        Args:
+            old_log_probs: Log-probs antiguas de las acciones
+            new_log_probs: Log-probs nuevas de las mismas acciones
+            advantages: Ventajas por paso ya calculadas
+            old_order_log_probs: Log-probs antiguas de la cabeza de decisión de pedido
+            new_order_log_probs: Log-probs nuevas de la cabeza de decisión de pedido
+            old_quantity_log_probs: Log-probs antiguas de la cabeza de cantidad
+            new_quantity_log_probs: Log-probs nuevas de la cabeza de cantidad
+            order_decisions: Decisiones binarias de pedido
+            order_entropies: Entropías de la cabeza de decisión de pedido
+            quantity_entropies: Entropías de la cabeza de cantidad
+            new_values: Predicciones de valor por paso
+            returns: Retornos acumulados por paso usados como objetivo de valor
+        
+        Returns:
+            tuple: (loss_total, policy_loss, entropy, value_loss)
+        """
         ratio = torch.exp(new_log_probs - old_log_probs)
-        surr1 = ratio * advantages.unsqueeze(-1)
-        surr2 = torch.clamp(ratio, 1.0 - self.ppo_clip, 1.0 + self.ppo_clip) * advantages.unsqueeze(-1)
+        surr1 = ratio * advantages
+        surr2 = torch.clamp(ratio, 1.0 - self.ppo_clip, 1.0 + self.ppo_clip) * advantages
         policy_loss = torch.min(surr1, surr2).mean()
 
         mask = order_decisions.float()
         order_entropy = order_entropies.mean()
         quantity_entropy = (quantity_entropies * mask).sum() / (mask.sum() + 1e-8)
-        #quantity_entropy = quantity_entropies.mean()
         entropy = order_entropy + quantity_entropy
-        
-        loss = -policy_loss - self.entropy_coef * entropy
-        
-        return loss, policy_loss, entropy
+
+        value_loss = F.mse_loss(new_values, returns)
+
+        loss = -policy_loss - self.entropy_coef * entropy + self.value_coef * value_loss
+
+        return loss, policy_loss, entropy, value_loss
 
     def train(self):
+        """
+        Ejecuta el bucle principal de entrenamiento PPO sobre trayectorias generadas online.
+        """
         epoch = getattr(self, 'currentEpoch', -1) + 1
 
         self.training_metrics = {
@@ -308,36 +342,6 @@ class DecisionTransformerTrainer(Trainer):
                 order_decisions = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
                 quantity_values = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
                 
-<<<<<<< HEAD
-                self.model.train()
-                
-                for step in range(trajectoryLength):
-                    # Guardar actionsEmbedding ANTES del forward porque se actualiza después de calcular las distribuciones
-                    # Necesitamos el estado antes de añadir la acción del paso actual para recalcular correctamente
-                    actions_emb_before = td["actionsEmbedding"].clone().detach()
-                    
-                    td = self.model.forward(td)
-                    
-                    order_decision = td["orderDecision"].detach()
-                    quantity_value = td["quantityValue"].detach()
-                    
-                    old_order_log_prob = td["orderDistribution"].log_prob(order_decision).detach()
-                    old_quantity_log_prob = td["quantityDistribution"].log_prob(quantity_value).detach()
-                    
-                    # Guardar la secuencia completa de embeddings hasta este punto
-                    # statesEmbedding tiene shape [batch, step+1, embedding_dim] (incluye estado del paso actual)
-                    # actionsEmbedding antes del forward tiene shape [batch, step, embedding_dim] (solo acciones anteriores)
-                    states_emb_sequences.append(td["statesEmbedding"].clone().detach())
-                    actions_emb_sequences.append(actions_emb_before)
-                    
-                    old_log_probs[:, step, :] = td["actionLogProb"].detach()
-                    old_order_log_probs[:, step, :] = old_order_log_prob
-                    old_quantity_log_probs[:, step, :] = old_quantity_log_prob
-                    quantity_values[:, step, :] = quantity_value
-                    order_decisions[:, step, :] = order_decision
-                
-                benefits = td["benefit"][:, -1].squeeze(-1)
-=======
                 self.model.eval()
                 with torch.no_grad():
                     for step in range(trajectoryLength):
@@ -365,53 +369,67 @@ class DecisionTransformerTrainer(Trainer):
                         quantity_values[:, step, :] = quantity_value
                         order_decisions[:, step, :] = order_decision
 
-                benefits = td["benefit"][:, -1].unsqueeze(-1) / 40000
->>>>>>> 4a460b7d37bf2a6c87f51180155ed01257ec7219
-                # Normalizar benefits para usarlos como advantages
-                advantages = (benefits - benefits.mean()) / (benefits.std() + 1e-8)
-                advantages = advantages.unsqueeze(-1)
+                rewards = td["benefit"]
+                if rewards.dim() == 2:
+                    rewards = rewards.unsqueeze(-1)
+                rewards = rewards.clone()
+                if rewards.size(1) > 1:
+                    rewards[:, 1:, :] = rewards[:, 1:, :] - rewards[:, :-1, :]
+                gamma = self.gamma
+                T = trajectoryLength
+                time_idx = torch.arange(T, device=self.device, dtype=rewards.dtype)
+                power = time_idx.unsqueeze(1) - time_idx.unsqueeze(0)
+                discount_matrix = torch.tril(torch.pow(gamma, power))
+                rewards_2d = rewards.squeeze(-1)
+                returns_2d = rewards_2d @ discount_matrix
+                returns = returns_2d.unsqueeze(-1) / 40000
+                values = td["values"]
+                if values.dim() == 2:
+                    values = values.unsqueeze(-1)
+                values = values / 40000
+                advantages = (returns - values).detach()
+                advantages_mean = advantages.mean()
+                advantages_std = advantages.std() + 1e-8
+                advantages = (advantages - advantages_mean) / advantages_std
+                returns = returns.detach()
                 
                 # Fase 2: PPO epochs - recalcular log_probs para cada timestep
                 total_loss = 0
                 total_policy_loss = 0
                 total_entropy = 0
+                total_value_loss = 0
                 self.model.train()
                 for ppo_epoch in range(self.ppo_epochs):
-                    # Crear nuevos tensors en cada iteración para evitar problemas con backward
                     new_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
                     new_order_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
                     new_quantity_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
                     order_entropies = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
                     quantity_entropies = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
+                    new_values = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
                     
-                    # Recalcular log_probs para cada timestep usando secuencias completas de embeddings
                     for step in range(trajectoryLength):
-                        # Obtener nuevas distribuciones usando la secuencia completa de embeddings hasta este punto
-                        # forward_from_embeddings espera [batch, seq_len, embedding_dim]
-                        # states_emb_sequences[step] tiene shape [batch, step+1, embedding_dim]
-                        # actions_emb_sequences[step] tiene shape [batch, step, embedding_dim]
-                        order_dist, quantity_dist, order_logit = self.model.forward_from_embeddings(
+                        order_dist, quantity_dist, order_logit, value_pred = self.model.forward_from_embeddings(
                             states_emb_sequences[step], 
                             actions_emb_sequences[step]
                         )
                         
-                        # Recalcular log_probs separados de la acción TOMADA en este timestep
                         new_order_log_prob = order_dist.log_prob(order_decisions[:, step, :])
                         new_quantity_log_prob = quantity_dist.log_prob(quantity_values[:, step, :])
                         new_log_prob = new_order_log_prob + order_decisions[:, step, :] * new_quantity_log_prob
                         
-                        # Escribir directamente en los tensors
                         new_log_probs[:, step, :] = new_log_prob
                         new_order_log_probs[:, step, :] = new_order_log_prob
                         new_quantity_log_probs[:, step, :] = new_quantity_log_prob
                         order_entropies[:, step, :] = order_dist.entropy()
                         quantity_entropies[:, step, :] = quantity_dist.entropy()
+                        new_values[:, step, :] = value_pred
                     
-                    loss, policy_loss, entropy = self.compute_ppo_loss(
+                    loss, policy_loss, entropy, value_loss = self.compute_ppo_loss(
                         old_log_probs, new_log_probs, advantages,
                         old_order_log_probs, new_order_log_probs,
                         old_quantity_log_probs, new_quantity_log_probs,
-                        order_decisions, order_entropies, quantity_entropies
+                        order_decisions, order_entropies, quantity_entropies,
+                        new_values, returns
                     )
                     
                     loss.backward()
@@ -422,10 +440,12 @@ class DecisionTransformerTrainer(Trainer):
                     total_loss += loss.detach().item()
                     total_policy_loss += policy_loss.detach().item()
                     total_entropy += entropy.detach().item()
+                    total_value_loss += value_loss.detach().item()
                 
                 avg_loss = total_loss / self.ppo_epochs
                 avg_policy_loss = total_policy_loss / self.ppo_epochs
                 avg_entropy = total_entropy / self.ppo_epochs
+                avg_value_loss = total_value_loss / self.ppo_epochs
                 
                 epochLoss += avg_loss
                 epoch_policy_loss += avg_policy_loss

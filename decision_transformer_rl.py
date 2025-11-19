@@ -84,6 +84,7 @@ class DecisionTransformer(nn.Module):
         self.outputMean = nn.Linear(self.embeddingDim, 1)  
         self.outputStd = nn.Linear(self.embeddingDim, 1)
         self.outputOrder = nn.Linear(self.embeddingDim, 1)
+        self.outputValue = nn.Linear(self.embeddingDim, 1)
         self.sigmoid = nn.Sigmoid()
         self.softplus = nn.Softplus()
     
@@ -192,6 +193,7 @@ class DecisionTransformer(nn.Module):
         tdNew["unitRevenue"] = td["unitRevenue"]
         tdNew["leadTime"] = td["leadTime"]
         tdNew["benefit"] = torch.zeros((batchSize, 0, 1), dtype=torch.float32, device=device)
+        tdNew["returns"] = torch.zeros((batchSize, 0, 1), dtype=torch.float32, device=device)
         tdNew["cumulativeSales"] = torch.zeros((batchSize, 0), dtype=torch.float32, device=device)
         tdNew["cumulativeHoldingCost"] = torch.zeros((batchSize, 0, 1), dtype=torch.float32, device=device)
         tdNew["cumulativeOrderingCost"] = torch.zeros((batchSize, 0, 1), dtype=torch.float32, device=device)
@@ -202,6 +204,7 @@ class DecisionTransformer(nn.Module):
         tdNew["statesEmbedding"] = torch.zeros((batchSize, 0, self.embeddingDim), dtype=torch.float, device=device)
         tdNew["actionsEmbedding"] = torch.zeros((batchSize, 0, self.embeddingDim), dtype=torch.float, device=device)
         tdNew["returnsToGoEmbedding"] = torch.zeros((batchSize, 0, self.embeddingDim), dtype=torch.float, device=device)
+        tdNew["values"] = torch.zeros((batchSize, 0, 1), dtype=torch.float32, device=device)
         
         tdNew["saved_returnsToGo"] = []
         tdNew["saved_actions"] = []
@@ -213,8 +216,7 @@ class DecisionTransformer(nn.Module):
    
     def forward(self, td):
         """
-        Forward pass del modelo para entrenamiento con RL clásico.
-        Siempre calcula las trayectorias, genera acciones y actualiza los estados.
+        Forward pass del modelo para RL que genera acción, valor escalar y actualiza el estado.
         
         Args:
             td: TensorDict con el estado actual
@@ -289,21 +291,22 @@ class DecisionTransformer(nn.Module):
         output = output[:, 0, -1, :]
         predictedMean = self.softplus(self.outputMean(output))
         predictedStd = self.softplus(self.outputStd(output))
-        
+        value = self.outputValue(output)
+
         orderAction = self.outputOrder(output)
         td["orderLogit"] = orderAction
         orderAction = self.sigmoid(orderAction)
         orderOrNot = Bernoulli(orderAction)
         predictedValue = Normal(predictedMean, predictedStd)
-        
+
         orderDecision = orderOrNot.sample()
         quantityValue = predictedValue.sample()
         predictedActionScaled = orderDecision * quantityValue
-        
+
         orderLogProb = orderOrNot.log_prob(orderDecision)
         quantityLogProb = predictedValue.log_prob(quantityValue)
         totalLogProb = orderLogProb +  quantityLogProb * orderDecision
-        
+
         predictedAction = self._unscale_field(predictedActionScaled, "orderQuantity")
         predictedAction = torch.ceil(predictedAction).long().float()
         orderQuantity = predictedAction
@@ -315,6 +318,7 @@ class DecisionTransformer(nn.Module):
         td["quantityDistribution"] = predictedValue
         td["orderDecision"] = orderDecision
         td["quantityValue"] = quantityValue
+        td["values"] = self.addSequenceData(td, td["values"], value.unsqueeze(1))
     
         orderQuantityScaled = self._scale_field(orderQuantity, "orderQuantity")
         actionEmbedding = self.embeddingAction(orderQuantityScaled).unsqueeze(1)
@@ -409,8 +413,17 @@ class DecisionTransformer(nn.Module):
     
     
     def forward_from_embeddings(self, statesEmbedding, actionsEmbedding):
-        batchSize = statesEmbedding.size(0)
+        """
+        Calcula distribuciones de acción y valor escalar a partir de secuencias de embeddings.
         
+        Args:
+            statesEmbedding: Embeddings de estados con shape [batch_size, seq_len, embedding_dim]
+            actionsEmbedding: Embeddings de acciones con shape [batch_size, seq_len_actions, embedding_dim]
+        
+        Returns:
+            tuple: (orderDist, quantityDist, orderLogit, value) para el último estado de la secuencia
+        """
+        batchSize = statesEmbedding.size(0)
         positions = torch.arange(statesEmbedding.size(1), device=self.device)
         positionsEmbeddings = self.positionTimeEmbedding(positions)
         positionsEmbeddings = positionsEmbeddings.unsqueeze(0).expand(statesEmbedding.size(0), -1, -1)
@@ -419,10 +432,24 @@ class DecisionTransformer(nn.Module):
         actionsEmbedding = actionsEmbedding + positionsEmbeddings[:, :actionsEmbedding.size(1), :]
         
         stackedInputs = (
-            torch.stack((statesEmbedding,
-                        torch.cat((actionsEmbedding,
-                                    torch.zeros(batchSize, statesEmbedding.size(1) - actionsEmbedding.size(1), self.embeddingDim, device=self.device)), dim=1)),
-                        dim=1)
+            torch.stack(
+                (
+                    statesEmbedding,
+                    torch.cat(
+                        (
+                            actionsEmbedding,
+                            torch.zeros(
+                                batchSize,
+                                statesEmbedding.size(1) - actionsEmbedding.size(1),
+                                self.embeddingDim,
+                                device=self.device,
+                            ),
+                        ),
+                        dim=1,
+                    ),
+                ),
+                dim=1,
+            )
             .permute(0, 2, 1, 3)
             .reshape(batchSize, 2 * statesEmbedding.size(1), self.embeddingDim)
         )
@@ -436,8 +463,9 @@ class DecisionTransformer(nn.Module):
         predictedStd = self.softplus(self.outputStd(output))
         orderLogit = self.outputOrder(output)
         orderAction = self.sigmoid(orderLogit)
+        value = self.outputValue(output)
         
         orderDist = Bernoulli(orderAction)
         quantityDist = Normal(predictedMean, predictedStd)
         
-        return orderDist, quantityDist, orderLogit
+        return orderDist, quantityDist, orderLogit, value
