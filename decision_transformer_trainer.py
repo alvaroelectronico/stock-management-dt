@@ -432,6 +432,7 @@ if __name__ == "__main__":
             decisionTransformerConfig=DecisionTransformerConfig(
                 hidden_size=32,
                 n_head=1,
+                n_layer=3
             ),
             scaling_params=scaling_params)
         
@@ -447,9 +448,9 @@ if __name__ == "__main__":
         )
         
         config = TrainerConfig(
-            nBatch=128,
+            nBatch=256,
             nVal=1000, 
-            stepsPerEpoch=100000//128 * 3,
+            stepsPerEpoch=100000//256 * 3,
             trainStrategy=DTTrainingStrategy(dataPath=data_paths),
             lr_scheduler=lr_scheduler,
             optimizer=optimizer,
@@ -457,7 +458,7 @@ if __name__ == "__main__":
         )
         trainer = DecisionTransformerTrainer(
             savePath="./training_models/",  # Cambiado a training_models
-            name="decision_transformer_model_32_1",  # Nombre más descriptivo
+            name="decision_transformer_model_32_1_3",  # Nombre más descriptivo
             model=model,
             trainerConfig=config
         )

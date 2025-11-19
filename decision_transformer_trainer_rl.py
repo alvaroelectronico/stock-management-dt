@@ -258,9 +258,11 @@ class DecisionTransformerTrainer(Trainer):
         surr1 = ratio * advantages.unsqueeze(-1)
         surr2 = torch.clamp(ratio, 1.0 - self.ppo_clip, 1.0 + self.ppo_clip) * advantages.unsqueeze(-1)
         policy_loss = torch.min(surr1, surr2).mean()
-         
+
+        mask = order_decisions.float()
         order_entropy = order_entropies.mean()
-        quantity_entropy = quantity_entropies.mean()
+        quantity_entropy = (quantity_entropies * mask).sum() / (mask.sum() + 1e-8)
+        #quantity_entropy = quantity_entropies.mean()
         entropy = order_entropy + quantity_entropy
         
         loss = -policy_loss - self.entropy_coef * entropy
@@ -307,34 +309,34 @@ class DecisionTransformerTrainer(Trainer):
                 quantity_values = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
                 benefits = torch.zeros(batch_size, trajectoryLength, device=self.device)
                 
-                self.model.train()
-                
-                for step in range(trajectoryLength):
-                    # Guardar actionsEmbedding ANTES del forward porque se actualiza después de calcular las distribuciones
-                    # Necesitamos el estado antes de añadir la acción del paso actual para recalcular correctamente
-                    actions_emb_before = td["actionsEmbedding"].clone().detach()
-                    
-                    td = self.model.forward(td)
-                    
-                    order_decision = td["orderDecision"].detach()
-                    quantity_value = td["quantityValue"].detach()
-                    
-                    old_order_log_prob = td["orderDistribution"].log_prob(order_decision).detach()
-                    old_quantity_log_prob = td["quantityDistribution"].log_prob(quantity_value).detach()
-                    
-                    # Guardar la secuencia completa de embeddings hasta este punto
-                    # statesEmbedding tiene shape [batch, step+1, embedding_dim] (incluye estado del paso actual)
-                    # actionsEmbedding antes del forward tiene shape [batch, step, embedding_dim] (solo acciones anteriores)
-                    states_emb_sequences.append(td["statesEmbedding"].clone().detach())
-                    actions_emb_sequences.append(actions_emb_before)
-                    
-                    old_log_probs[:, step, :] = td["actionLogProb"].detach()
-                    old_order_log_probs[:, step, :] = old_order_log_prob
-                    old_quantity_log_probs[:, step, :] = old_quantity_log_prob
-                    quantity_values[:, step, :] = quantity_value
-                    order_decisions[:, step, :] = order_decision
-                    benefits[:, step] = td["benefit"][:, -1].squeeze(-1).detach()
-                
+                self.model.eval()
+                with torch.no_grad():
+                    for step in range(trajectoryLength):
+                        # Guardar actionsEmbedding ANTES del forward porque se actualiza después de calcular las distribuciones
+                        # Necesitamos el estado antes de añadir la acción del paso actual para recalcular correctamente
+                        actions_emb_before = td["actionsEmbedding"].clone().detach()
+
+                        td = self.model.forward(td)
+
+                        order_decision = td["orderDecision"].detach()
+                        quantity_value = td["quantityValue"].detach()
+
+                        old_order_log_prob = td["orderDistribution"].log_prob(order_decision).detach()
+                        old_quantity_log_prob = td["quantityDistribution"].log_prob(quantity_value).detach()
+
+                        # Guardar la secuencia completa de embeddings hasta este punto
+                        # statesEmbedding tiene shape [batch, step+1, embedding_dim] (incluye estado del paso actual)
+                        # actionsEmbedding antes del forward tiene shape [batch, step, embedding_dim] (solo acciones anteriores)
+                        states_emb_sequences.append(td["statesEmbedding"].clone().detach())
+                        actions_emb_sequences.append(actions_emb_before)
+
+                        old_log_probs[:, step, :] = td["actionLogProb"].detach()
+                        old_order_log_probs[:, step, :] = old_order_log_prob
+                        old_quantity_log_probs[:, step, :] = old_quantity_log_prob
+                        quantity_values[:, step, :] = quantity_value
+                        order_decisions[:, step, :] = order_decision
+
+                benefits = td["benefit"][:, -1].unsqueeze(-1) / 40000
                 # Normalizar benefits para usarlos como advantages
                 advantages = (benefits - benefits.mean()) / (benefits.std() + 1e-8)
                 
@@ -342,7 +344,7 @@ class DecisionTransformerTrainer(Trainer):
                 total_loss = 0
                 total_policy_loss = 0
                 total_entropy = 0
-                
+                self.model.train()
                 for ppo_epoch in range(self.ppo_epochs):
                     # Crear nuevos tensors en cada iteración para evitar problemas con backward
                     new_log_probs = torch.zeros(batch_size, trajectoryLength, 1, device=self.device)
@@ -498,26 +500,26 @@ if __name__ == "__main__":
         # Crear el modelo con los parámetros de escalado
         model = DecisionTransformer(
             decisionTransformerConfig=DecisionTransformerConfig(
-                hidden_size=96,
+                hidden_size=64,
                 n_head=2,
             ),
             scaling_params=scaling_params)
         
         # Crear el trainer con AdamW y learning rate más alto
-        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4, weight_decay=0.01)
         
         # Learning rate scheduler más conservador
         lr_scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer,
             start_factor=1.0,  # Factor inicial (5e-4)
-            end_factor=0.01,    # Factor final (2.5e-4 / 5e-4 = 0.5)
-            total_iters=50    # Mucho menos agresivo
+            end_factor=0.1,    # Factor final (2.5e-4 / 5e-4 = 0.5)
+            total_iters=150    # Mucho menos agresivo
         )
         
         config = TrainerConfig(
-            nBatch=16,
+            nBatch=64,
             nVal=1000, 
-            stepsPerEpoch=100000//128 * 3,
+            stepsPerEpoch=750,
             trainStrategy=DTTrainingStrategy(dataPath=data_paths),
             lr_scheduler=lr_scheduler,
             optimizer=optimizer,
@@ -525,7 +527,7 @@ if __name__ == "__main__":
         )
         trainer = DecisionTransformerTrainer(
             savePath="./training_models/",  # Cambiado a training_models
-            name="decision_transformer_model",  # Nombre más descriptivo
+            name="decision_transformer_model_rl",  # Nombre más descriptivo
             model=model,
             trainerConfig=config
         )
