@@ -211,7 +211,7 @@ def generateTrajectory(inputData, trajectoryLength=TRAJECTORY_LENGTH):
             trajectory.append({
                 'state': state, 
                 'action': current_order_quantity,
-                'returnToGo': current_rtg
+                'returnToGo': 1
             })
             
             stepsRecorded += 1
@@ -272,7 +272,7 @@ def addTrajectoryToTrainingData(trajectory, trainingData):
 
 
 if __name__ == "__main__":
-    noTrajectories = 32
+    noTrajectories = 15000
     trainingData = TensorDict({})
     
     for i in range(noTrajectories):
@@ -287,7 +287,7 @@ if __name__ == "__main__":
         return str(Path(__file__).resolve().parent)
 
     torch.save(trainingData,
-               getProjectDirectory() + "/data/training_data.pt")
+               getProjectDirectory() + "/data/test_data.pt")
     
     
 

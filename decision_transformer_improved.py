@@ -40,7 +40,7 @@ def loadModel(path, decisionTransformerConfig, scaling_params=None):
     Returns:
         Modelo DecisionTransformer cargado
     """
-    checkpoint = torch.load(path, weights_only=False)
+    checkpoint = torch.load(path, weights_only=False, map_location=getTorchDevice())
     model = DecisionTransformer(decisionTransformerConfig, scaling_params=scaling_params)
     model.load_state_dict(checkpoint["model_state"])
     
@@ -292,10 +292,17 @@ class DecisionTransformer(nn.Module):
             self.embeddingDim
         )
         
+        leadTimes = td["leadTime"].long()
+        leadTimesExpanded = leadTimes.unsqueeze(1).expand(-1, seqLen).reshape(-1)
+        positions = torch.arange(FORECAST_LENGTH + MAX_LEAD_TIME, device=device).unsqueeze(0)
+        valid_limit = FORECAST_LENGTH + leadTimesExpanded.unsqueeze(1)
+        key_padding_mask = positions >= valid_limit
+        
         mhaState, _ = self.mhaState(
             query=scalarDataProjectionReshaped,
             key=demandStockTimeEmbeddingReshaped,
-            value=demandStockTimeEmbeddingReshaped
+            value=demandStockTimeEmbeddingReshaped,
+            key_padding_mask=key_padding_mask
         )
         
         statesEmbedding = mhaState.reshape(batchSize, seqLen, self.embeddingDim)
@@ -400,10 +407,16 @@ class DecisionTransformer(nn.Module):
                 stockInTransitTimeEmbedding = stockInTransitDataProjection + stockTimeProjection.unsqueeze(0)
                 demandStockTimeEmbedding = torch.cat([demandTimeEmbedding, stockInTransitTimeEmbedding], dim=1)
 
+                leadTimes = td["leadTime"].long()
+                positions = torch.arange(FORECAST_LENGTH + MAX_LEAD_TIME, device=td["forecast"].device).unsqueeze(0)
+                valid_limit = FORECAST_LENGTH + leadTimes.unsqueeze(1)
+                key_padding_mask = positions >= valid_limit
+
                 mhaState, _ = self.mhaState(
                     query=scalarDataProjection.unsqueeze(1),
                     key=demandStockTimeEmbedding,
-                    value=demandStockTimeEmbedding 
+                    value=demandStockTimeEmbedding,
+                    key_padding_mask=key_padding_mask
                     )
 
                 td["statesEmbedding"] = self.addSequenceData(td, td["statesEmbedding"], mhaState)
@@ -518,7 +531,6 @@ class DecisionTransformer(nn.Module):
 
         td["forecast"] = torch.roll(td["forecast"], shifts=-1, dims=1)
         td["demand"] = torch.roll(td["demand"], shifts=-1, dims=-1)
-        td["returnsToGo"] = td["returnsToGo"] + holdingCost + stockoutPenalty + orderingCost
 
         if is_test:
             if not hasattr(self, 'test_metrics'):

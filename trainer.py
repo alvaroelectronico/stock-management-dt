@@ -32,19 +32,29 @@ def checkCompileSupport():
 
 class TrainerConfig:
 
-    def __init__(self, nBatch, nVal, stepsPerEpoch, trainStrategy=None, optimizer=None, lr_scheduler=None, testDataPath=None, mixed_precision=None):
+    def __init__(
+        self,
+        nBatch,
+        nVal,
+        stepsPerEpoch,
+        trainStrategy=None,
+        optimizer=None,
+        lr_scheduler=None,
+        testDataPath=None,
+        mixed_precision=None,
+        save_rl_trajectories=False,
+        save_rtg_min=True,
+        save_rtg_max=True,
+        rtg_intervals=None,
+    ):
         """
-        Configuración del entrenador.
+        Configuración del entrenador para Decision Transformer.
         
         Args:
-            nBatch: Tamaño del batch
-            nVal: Tamaño de validación
-            stepsPerEpoch: Pasos por época
-            trainStrategy: Estrategia de entrenamiento
-            optimizer: Optimizador
-            lr_scheduler: Scheduler de learning rate
-            testDataPath: Ruta de datos de test
-            mixed_precision: Tipo de precisión mixta. Puede ser None (precisión completa), "bfloat16" o "float16"
+            save_rtg_min: Si se guarda RTG=0 (peor beneficio). Por defecto: True
+            save_rtg_max: Si se guarda RTG=1 (mejor beneficio). Por defecto: True
+            rtg_intervals: Lista de tuplas con intervalos intermedios a guardar.
+                          Por defecto: [(0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0)]
         """
         if trainStrategy is None:
             trainStrategy = {
@@ -53,6 +63,8 @@ class TrainerConfig:
                     "dataPath": [getProjectDirectory() + "/data/training_data.pt"],
                 }
             }
+        if rtg_intervals is None:
+            rtg_intervals = [(0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0)]
         self.nBatch = nBatch
         self.nVal = nVal
         self.stepsPerEpoch = stepsPerEpoch 
@@ -62,6 +74,10 @@ class TrainerConfig:
         self.testDataPath = testDataPath
         self.mixed_precision = mixed_precision
         self.use_bfloat16 = (mixed_precision == "bfloat16")
+        self.save_rl_trajectories = save_rl_trajectories
+        self.save_rtg_min = save_rtg_min
+        self.save_rtg_max = save_rtg_max
+        self.rtg_intervals = rtg_intervals
     
     def to_dict(self):
        dict = {
@@ -70,6 +86,10 @@ class TrainerConfig:
            "stepsPerEpoch": self.stepsPerEpoch,
            "trainStrategy": self.trainStrategy,
            "mixed_precision": self.mixed_precision,
+           "save_rl_trajectories": self.save_rl_trajectories,
+           "save_rtg_min": self.save_rtg_min,
+           "save_rtg_max": self.save_rtg_max,
+           "rtg_intervals": self.rtg_intervals,
        }
        return dict
 

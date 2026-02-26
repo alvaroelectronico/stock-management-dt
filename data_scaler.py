@@ -319,7 +319,7 @@ def scale_returns_to_go(data: torch.Tensor, mean: float, std: float) -> torch.Te
     Returns:
         Tensor escalado
     """
-    return (data - mean) / std
+    return data
 
 
 def unscale_returns_to_go(data: torch.Tensor, mean: float, std: float) -> torch.Tensor:
@@ -334,7 +334,7 @@ def unscale_returns_to_go(data: torch.Tensor, mean: float, std: float) -> torch.
     Returns:
         Tensor desescalado
     """
-    return data * std + mean
+    return data
 
 
 def scale_benefit(data: torch.Tensor, mean: float, std: float) -> torch.Tensor:

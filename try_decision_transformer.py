@@ -7,7 +7,8 @@ from plotly.subplots import make_subplots
 import scipy.stats as stats
 from pathlib import Path
 from tensordict import TensorDict
-from decision_transformer_improved import DecisionTransformer, loadModel
+import decision_transformer_improved as dt_improved
+import decision_transformer_rl as dt_rl
 from decision_transformer_config import DecisionTransformerConfig
 from generate_trajectories import generateInstanceData, generateTrajectory, addTrajectoryToTrainingData, TRAJECTORY_LENGTH, FORECAST_LENGTH, MAX_LEAD_TIME
 from data_scaler import compute_scaling_params_from_training_data
@@ -16,14 +17,7 @@ DEBUG_TEST_SAVED_COUNT = 0
 
 def save_test_debug_input(td, step, realAction, realReturnToGo):
     """
-    Guarda todos los inputs del modelo durante el test para debugging.
-    Se ejecuta dos veces para análisis del primer y segundo paso.
-    
-    Args:
-        td: TensorDict con todos los datos del estado
-        step: Paso actual del test
-        realAction: Acción real para comparación
-        realReturnToGo: Return to go real para comparación
+    Guarda una instantánea de los inputs del modelo durante el test para debugging.
     """
     global DEBUG_TEST_SAVED_COUNT
     
@@ -49,7 +43,7 @@ def save_test_debug_input(td, step, realAction, realReturnToGo):
             "leadTime": td["leadTime"].cpu().tolist(),
         },
         "returns_data": {
-            "returnsToGo": td["returnsToGo"].cpu().tolist(),
+            "returnsToGo": td["returnsToGo"].cpu().tolist() if "returnsToGo" in td else None,
             "benefit": td["benefit"].cpu().tolist() if "benefit" in td else None,
         },
         "comparison_data": {
@@ -70,21 +64,13 @@ def save_test_debug_input(td, step, realAction, realReturnToGo):
 
 
 def getProjectDirectory():
-    """Obtiene el directorio del proyecto."""
+    """Obtiene el directorio raíz del proyecto."""
     return str(Path(__file__).resolve().parent)
 
 
-def loadTrainedModel(modelPath, config=None, dataPath=None):
+def loadTrainedModel(modelPath, config=None, dataPath=None, model_type="improved"):
     """
-    Carga un modelo Decision Transformer ya entrenado con parámetros de escalado.
-    
-    Args:
-        modelPath: Ruta al archivo del modelo entrenado (.pt)
-        configPath: Ruta al archivo de configuración (opcional)
-        dataPath: Ruta a los datos de entrenamiento para calcular parámetros de escalado (opcional)
-    
-    Returns:
-        Modelo Decision Transformer cargado
+    Carga un modelo Decision Transformer (offline o RL) ya entrenado con escalado opcional.
     """
     if config is None:
         config = DecisionTransformerConfig()
@@ -99,7 +85,13 @@ def loadTrainedModel(modelPath, config=None, dataPath=None):
             print(f"Advertencia: No se pudieron calcular los parámetros de escalado: {e}")
             print("El modelo funcionará sin escalado")
     
-    model = loadModel(modelPath, config, scaling_params=scaling_params)
+    if model_type == "rl":
+        # Modelo entrenado con PPO sobre entorno simulado
+        model = dt_rl.loadModel(modelPath, config, scaling_params=scaling_params)
+    else:
+        # Modelo decision transformer supervisado con return-to-go
+        model = dt_improved.loadModel(modelPath, config, scaling_params=scaling_params)
+
     model.eval()
     
     return model
@@ -107,14 +99,7 @@ def loadTrainedModel(modelPath, config=None, dataPath=None):
 
 def getTestProblem(dataPath, problemIndex=0):
     """
-    Obtiene un problema de los datos de entrenamiento para testing.
-    
-    Args:
-        dataPath: Ruta a los datos de entrenamiento
-        problemIndex: Índice del problema a usar (por defecto 0)
-    
-    Returns:
-        TensorDict con los datos del problema
+    Obtiene un problema de los datos de entrenamiento para testing autoregresivo.
     """
     trainingData = torch.load(dataPath, weights_only=False)
     
@@ -145,18 +130,9 @@ def getTestProblem(dataPath, problemIndex=0):
     return problem
 
 
-def tryDecisionTransformer(model, problem, maxSteps=None):
+def tryDecisionTransformer(model, problem, maxSteps=None, model_type="improved"):
     """
-    Ejecuta el Decision Transformer en modo autoregresivo.
-    El modelo genera predicciones basándose en sus propias predicciones anteriores.
-    
-    Args:
-        model: Modelo Decision Transformer entrenado
-        problem: TensorDict con los datos del problema
-        maxSteps: Número máximo de pasos a ejecutar (por defecto TRAJECTORY_LENGTH)
-    
-    Returns:
-        Lista de diccionarios con los resultados de cada paso
+    Ejecuta el modelo (offline o RL) en modo autoregresivo usando sus propias predicciones.
     """
     if maxSteps is None:
         maxSteps = TRAJECTORY_LENGTH
@@ -168,6 +144,7 @@ def tryDecisionTransformer(model, problem, maxSteps=None):
     td = model.initModel(td)
     
     results = []
+    supports_rtg_prediction = hasattr(model, "setInitalReturnToGo")
     
     for step in range(maxSteps):
         realAction = problem['realActions'][0, step].item()
@@ -176,7 +153,11 @@ def tryDecisionTransformer(model, problem, maxSteps=None):
         save_test_debug_input(td, step, realAction, realReturnToGo)
         
         with torch.no_grad():
-            td = model.forward(td, nextOrderQuantity=None, is_test=True, update_only=False)
+            if model_type == "rl":
+                # En RL el forward sólo recibe el estado y decide la acción
+                td = model.forward(td)
+            else:
+                td = model.forward(td, nextOrderQuantity=None, is_test=True, update_only=False)
             predictedAction = td['predictedAction'][0, 0].item()
         
         predictedBenefit = td['benefit'][0, -1].item() if 'benefit' in td and td['benefit'].size(1) > 0 else 0.0
@@ -209,6 +190,7 @@ def tryDecisionTransformer(model, problem, maxSteps=None):
         
         actionDifference = abs(predictedAction - realAction)
         actionError = actionDifference / max(realAction, 1e-6) if realAction > 0 else actionDifference
+        predictedReturnToGo = td['returnsToGo'][0].item() if supports_rtg_prediction and 'returnsToGo' in td else None
         
         stepResult = {
             'step': step,
@@ -218,7 +200,7 @@ def tryDecisionTransformer(model, problem, maxSteps=None):
             'realAction': realAction,
             'predictedAction': predictedAction,
             'realReturnToGo': realReturnToGo,
-            'predictedReturnToGo': td['returnsToGo'][0].item(),
+            'predictedReturnToGo': predictedReturnToGo,
             'actionDifference': actionDifference,
             'actionError': actionError,
             'actionAccuracy': 1.0 - min(actionError, 1.0),
@@ -241,14 +223,7 @@ def tryDecisionTransformer(model, problem, maxSteps=None):
 
 def generateTestReport(results, outputPath=None):
     """
-    Genera un reporte JSON con los resultados del test.
-    
-    Args:
-        results: Lista de resultados de cada paso
-        outputPath: Ruta donde guardar el reporte (opcional)
-    
-    Returns:
-        Diccionario con el reporte completo
+    Genera un reporte JSON agregando errores y precisión media de acciones.
     """
     totalSteps = len(results)
     totalActionError = sum(r['actionError'] for r in results)
@@ -482,10 +457,14 @@ def createCombinedPlots(results, outputPath=None):
     return fig
 
 
-def runDecisionTransformerTest(modelPath, dataPath, problemIndex=0, config=None, maxSteps=None, outputPath=None, plotOutputPath=None):
-    model = loadTrainedModel(modelPath, config=config, dataPath=dataPath).to(device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
-    problem = getTestProblem(dataPath, problemIndex).to(device=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-    results = tryDecisionTransformer(model, problem, maxSteps)
+def runDecisionTransformerTest(modelPath, dataPath, problemIndex=0, config=None, maxSteps=None, outputPath=None, plotOutputPath=None, model_type="improved"):
+    """
+    Ejecuta un test completo (carga modelo, genera problema, evalúa y grafica).
+    """
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = loadTrainedModel(modelPath, config=config, dataPath=dataPath, model_type=model_type).to(device=device)
+    problem = getTestProblem(dataPath, problemIndex).to(device=device)
+    results = tryDecisionTransformer(model, problem, maxSteps, model_type=model_type)
     report = generateTestReport(results, outputPath)
     createCombinedPlots(results, plotOutputPath)
     
@@ -493,15 +472,21 @@ def runDecisionTransformerTest(modelPath, dataPath, problemIndex=0, config=None,
 
 
 if __name__ == "__main__":
+    # Selecciona el tipo de modelo: "improved" para decision_transformer_improved
+    # o "rl" para decision_transformer_rl entrenado con PPO.
+    model_type = "rl"  # Cambia a "rl" para probar el modelo RL
+
     projectDir = getProjectDirectory()
     config = DecisionTransformerConfig(
         n_head=1,
         hidden_size=32
     )
-    modelPath = os.path.join(projectDir, "training_models/decision_transformer_model_32_1_3", "best.pt")
+
+    modelDirName = "decision_transformer_model" if model_type == "improved" else "decision_transformer_model_rl"
+    modelPath = os.path.join(projectDir, "training_models", modelDirName, "best.pt")
     dataPath = os.path.join(projectDir, "data", "test_data.pt")
-    outputPath = os.path.join(projectDir, "test_results.json")
-    plotOutputPath = os.path.join(projectDir, "combined_plots.html")
+    outputPath = os.path.join(projectDir, f"test_results_{model_type}.json")
+    plotOutputPath = os.path.join(projectDir, f"combined_plots_{model_type}.html")
     
     if not os.path.exists(modelPath):
         print(f"Error: No se encontró el modelo en {modelPath}")
@@ -510,21 +495,22 @@ if __name__ == "__main__":
     
     if not os.path.exists(dataPath):
         print(f"Error: No se encontraron los datos en {dataPath}")
-        print("Ejecuta generate_tajectories.py para generar los datos de entrenamiento.")
+        print("Ejecuta generate_trajectories.py para generar los datos de test.")
         exit(1)
     
     try:
         report = runDecisionTransformerTest(
             modelPath=modelPath,
             dataPath=dataPath,
-            problemIndex=643,#786,#643,#899,
+            problemIndex=275,  # Cambia el índice del problema si lo necesitas
             maxSteps=30,
             outputPath=outputPath,
             plotOutputPath=plotOutputPath,
-            config=config
+            config=config,
+            model_type=model_type,
         )
         
-        print(f"\nTest completado exitosamente!")
+        print(f"\nTest completado exitosamente para el modelo '{model_type}'!")
         print(f"Reporte detallado guardado en: {outputPath}")
         print(f"Gráficas combinadas guardadas en: {plotOutputPath}")
         

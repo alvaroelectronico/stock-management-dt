@@ -209,6 +209,10 @@ class DecisionTransformerTrainer(Trainer):
                 
                 test_td = {k: v.clone() for k, v in test_problem.items()}
                 test_td = {k: v.to(self.device) for k, v in test_td.items()}
+                # Agregar returnsToGo con valor 1 si no existe
+                if "returnsToGo" not in test_td:
+                    batch_size = test_td["onHandLevel"].size(0)
+                    test_td["returnsToGo"] = torch.ones(batch_size, device=self.device)
                 test_td = self.model.initModel(test_td)
                 trajectory_length = test_td['demand'].size(1)
 
@@ -418,10 +422,9 @@ if __name__ == "__main__":
         lr_scheduler=1e-4
     )
     
-    
     try:
         # Rutas de datos de entrenamiento
-        data_paths = ["data/training_data.pt"]
+        data_paths = ["data/rl_solution_trajectories.pt"]
         
         # Calcular parámetros de escalado desde los datos de entrenamiento
         scaling_params = compute_scaling_params_from_training_data(data_paths)
@@ -430,8 +433,8 @@ if __name__ == "__main__":
         # Crear el modelo con los parámetros de escalado
         model = DecisionTransformer(
             decisionTransformerConfig=DecisionTransformerConfig(
-                hidden_size=32,
-                n_head=1,
+                hidden_size=64,
+                n_head=2,
                 n_layer=3
             ),
             scaling_params=scaling_params)
@@ -444,7 +447,7 @@ if __name__ == "__main__":
             optimizer,
             start_factor=1.0,  # Factor inicial (5e-4)
             end_factor=0.01,    # Factor final (2.5e-4 / 5e-4 = 0.5)
-            total_iters=300    # Mucho menos agresivo
+            total_iters=50    # Mucho menos agresivo
         )
         
         config = TrainerConfig(
